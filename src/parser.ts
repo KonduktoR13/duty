@@ -14,8 +14,13 @@ function tokens(row: Glyph[]) { const sorted = [...row].sort((a,b)=>a.x-b.x); co
 export function parseGlyphs(glyphs: Glyph[], plainText: string): ParsedSchedule {
   const month = detectMonth(plainText); if (!month) throw new Error('Не удалось определить месяц и год в PDF')
   const days = new Date(Number(month.slice(0,4)), Number(month.slice(5)), 0).getDate(); const rows = lines(glyphs)
-  const header = rows.map(tokens).sort((a,b)=>b.filter(x=>Number(x.text)>=1&&Number(x.text)<=days).length-a.filter(x=>Number(x.text)>=1&&Number(x.text)<=days).length)[0]
-  const dayCells = header.filter(x=>Number(x.text)>=1&&Number(x.text)<=days).filter((x,i,a)=>a.findIndex(v=>v.text===x.text)===i).sort((a,b)=>Number(a.text)-Number(b.text))
+  // PDF.js emits the visually blank spaces as wide text items. Joining those
+  // items into tokens merges the whole day header ("1 2 … 31") into one token.
+  // Day numbers themselves are separate positioned text items, so use them
+  // directly and preserve their centres for the row-cell boundaries.
+  const isDay = (g: Glyph) => /^\d+$/.test(g.text.trim()) && Number(g.text) >= 1 && Number(g.text) <= days
+  const header = [...rows].sort((a,b) => b.filter(isDay).length - a.filter(isDay).length)[0]
+  const dayCells = header.filter(isDay).filter((x,i,a)=>a.findIndex(v=>v.text.trim()===x.text.trim())===i).map(x=>({text:x.text.trim(),center:x.x+x.width/2})).sort((a,b)=>Number(a.text)-Number(b.text))
   if (dayCells.length !== days) throw new Error(`Найдены не все дни месяца: ${dayCells.length} из ${days}`)
   const candidates: Candidate[] = []
   for (const row of rows) { const leftEdge = dayCells[0].center - (dayCells[1].center-dayCells[0].center)/2; const label = row.filter(g=>g.x+g.width/2 < leftEdge).sort((a,b)=>a.x-b.x).map(x=>x.text).join('').replace(/\s/g,''); const match = label.match(/^D(\d+)$/i); if (!match) continue
