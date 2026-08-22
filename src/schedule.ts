@@ -14,7 +14,7 @@ export function normalizeCrossMonth(raw: Shift[]): Shift[] {
     const prev = raw.find(item => item.date === prevKey)
     const following = raw.find(item => item.date === nextKey)
     if (isFirst && /^8$/i.test(shift.code) && prev && prev.hours === 16 && /^16$/i.test(prev.code) && prev.date.slice(8) === String(new Date(previous.getFullYear(), previous.getMonth()+1, 0).getDate()).padStart(2, '0')) return []
-    return [isLast && shift.hours === 16 && /^16$/i.test(shift.code) && following && /^8$/i.test(following.code) ? { ...shift, hours: 24, code: '16+8' } : shift]
+    return [isLast && shift.hours === 16 && /^16$/i.test(shift.code) && following && /^8$/i.test(following.code) ? { ...shift, hours: 24, code: '24' } : shift]
   })
 }
 export function timeLabel(shift: Shift) {
