@@ -13,7 +13,12 @@ function lines(glyphs: Glyph[]) { const rows: Glyph[][] = []; for (const g of [.
 function tokens(row: Glyph[]) { const sorted = [...row].sort((a,b)=>a.x-b.x); const result: Glyph[][] = []; for (const glyph of sorted) { const cur = result.at(-1); const prev = cur?.at(-1); if (!cur || !prev || glyph.x - (prev.x + prev.width) > Math.max(2.2, prev.width*.55)) result.push([glyph]); else cur.push(glyph) } return result.map(group => ({ text: group.map(x=>x.text).join('').trim(), center: group.reduce((n,x)=>n+x.x+x.width/2,0)/group.length })) }
 export function parseGlyphs(glyphs: Glyph[], plainText: string): ParsedSchedule {
   const month = detectMonth(plainText); if (!month) throw new Error('Не удалось определить месяц и год в PDF')
-  const days = new Date(Number(month.slice(0,4)), Number(month.slice(5)), 0).getDate(); const rows = lines(glyphs)
+  const days = new Date(Number(month.slice(0,4)), Number(month.slice(5)), 0).getDate()
+  const countOnAxis = (axis: 'x'|'y') => { const groups: Glyph[][]=[]; for(const g of [...glyphs].sort((a,b)=>a[axis]-b[axis])){const row=groups.at(-1);if(!row||Math.abs(row.reduce((n,v)=>n+v[axis],0)/row.length-g[axis])>2.5)groups.push([g]);else row.push(g)} return Math.max(...groups.map(row=>row.filter(g=>/^\d+$/.test(g.text.trim())&&Number(g.text)>=1&&Number(g.text)<=days).length)) }
+  // Some roster PDFs are physically rotated: day numbers form a vertical
+  // column. Rotate their coordinate system before applying the same table rule.
+  const oriented = countOnAxis('x') > countOnAxis('y') ? glyphs.map(g=>({...g,x:g.y,y:g.x})) : glyphs
+  const rows = lines(oriented)
   // PDF.js emits the visually blank spaces as wide text items. Joining those
   // items into tokens merges the whole day header ("1 2 … 31") into one token.
   // Day numbers themselves are separate positioned text items, so use them
