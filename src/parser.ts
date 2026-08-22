@@ -1,6 +1,6 @@
 import * as pdfjs from 'pdfjs-dist'
 import workerSrc from 'pdfjs-dist/build/pdf.worker.mjs?url'
-import type { Candidate, ParsedSchedule, Shift } from './types'
+import type { Candidate, LeaveCode, ParsedSchedule, Shift } from './types'
 
 pdfjs.GlobalWorkerOptions.workerSrc = workerSrc
 type Glyph = { text: string; x: number; y: number; width: number }
@@ -31,8 +31,14 @@ export function parseGlyphs(glyphs: Glyph[], plainText: string): ParsedSchedule 
   for (const row of rows) { const leftEdge = dayCells[0].center - (dayCells[1].center-dayCells[0].center)/2; const label = row.filter(g=>g.x+g.width/2 < leftEdge).sort((a,b)=>a.x-b.x).map(x=>x.text).join('').replace(/\s/g,''); const match = label.match(/^D(\d+)$/i); if (!match) continue
     const values = dayCells.map((cell, i) => { const l=i? (dayCells[i-1].center+cell.center)/2 : cell.center-(dayCells[1].center-cell.center)/2; const r=i===days-1?cell.center+(cell.center-dayCells[i-1].center)/2:(cell.center+dayCells[i+1].center)/2; return row.filter(g=>g.x+g.width/2>=l&&g.x+g.width/2<r).sort((a,b)=>a.x-b.x).map(g=>g.text).join('').replace(/^D\d+/, '').trim() || '.' })
     const shifts: Shift[] = values.flatMap((raw,index) => { const code=raw.replace(/\s/g,'').replace(/^#/,''); const m=code.match(/^(\d+)(P)?$/i); return m && +m[1]>=1 && +m[1]<=48 ? [{date:`${month}-${String(index+1).padStart(2,'0')}`,hours:+m[1],code}] : [] })
-    const leaveDates = values.flatMap((raw, index) => /^P$/i.test(raw.replace(/\s/g,'')) ? [`${month}-${String(index+1).padStart(2,'0')}`] : [])
-    candidates.push({ number: `D${match[1]}`, values, shifts, leaveDates, confidence: shifts.length || leaveDates.length ? 'high' : 'review' })
+    const leaveCodes: Record<string, LeaveCode> = {}
+    values.forEach((raw, index) => {
+      const value = raw.replace(/\s/g, '')
+      const code = /^P$/i.test(value) ? 'P' : /^LHPu$/i.test(value) ? 'LHPu' : null
+      if (code) leaveCodes[`${month}-${String(index + 1).padStart(2, '0')}`] = code
+    })
+    const leaveDates = Object.keys(leaveCodes)
+    candidates.push({ number: `D${match[1]}`, values, shifts, leaveDates, leaveCodes, confidence: shifts.length || leaveDates.length ? 'high' : 'review' })
   }
   if (!candidates.length) throw new Error('В таблице не найдены Delta/D-номера')
   return { month, candidates, warnings: candidates.some(x=>x.confidence==='review') ? ['Некоторые строки требуют проверки: в них нет распознанных смен.'] : [] }

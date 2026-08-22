@@ -5,7 +5,8 @@ async function tx<T>(store: string, mode: IDBTransactionMode, action:(s:IDBObjec
 export const storage = {
   months: async () => ((await tx('months', 'readonly', s => s.getAll())).sort((a: MonthRecord, b: MonthRecord) => b.id.localeCompare(a.id)) as MonthRecord[]),
   put: (m: MonthRecord) => tx('months', 'readwrite', s => s.put(m)),
-  remove: async (id: string) => { await Promise.all([tx('months', 'readwrite', s => s.delete(id)), tx('pdfs', 'readwrite', s => s.delete(id))]) },
+  saveImport: async (month: MonthRecord, pdf: Blob) => { const d=await db(); await new Promise<void>((resolve,reject)=>{const t=d.transaction(['months','pdfs'],'readwrite');t.objectStore('months').put(month);t.objectStore('pdfs').put(pdf,month.id);t.oncomplete=()=>resolve();t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error)}) },
+  remove: async (id: string) => { const d=await db(); await new Promise<void>((resolve,reject)=>{const t=d.transaction(['months','pdfs'],'readwrite');t.objectStore('months').delete(id);t.objectStore('pdfs').delete(id);t.oncomplete=()=>resolve();t.onerror=()=>reject(t.error);t.onabort=()=>reject(t.error)}) },
   putPdf: (id: string, pdf: Blob) => tx('pdfs', 'readwrite', s => s.put(pdf, id)),
   pdf: (id: string) => tx<Blob | undefined>('pdfs', 'readonly', s => s.get(id)),
   setting: <T>(key: string) => tx<T>('settings', 'readonly', s => s.get(key)),

@@ -32,4 +32,12 @@ describe.skipIf(!local)('August 2026 reference PDF', () => {
     const parsed = parseGlyphs(glyphs, content.items.map(x => 'str' in x ? x.str : '').join(' ')); const d12 = parsed.candidates.find(x => x.number === 'D12')!
     expect(d12.shifts.map(x => x.date)).toEqual(['2026-07-17','2026-07-21','2026-07-23','2026-07-27','2026-07-28','2026-07-29','2026-07-30','2026-07-31'])
   })
+
+  it('keeps D13 LHPu as parental-care leave, not a shift', async () => {
+    const data = new Uint8Array(await readFile(source)); const doc = await pdfjs.getDocument({ data, disableWorker: true }).promise
+    const page = await doc.getPage(1); const content = await page.getTextContent()
+    const glyphs = content.items.filter((x): x is typeof x & { str: string; transform: number[]; width: number } => 'str' in x).map(x => ({ text: x.str, x: x.transform[4], y: x.transform[5], width: x.width }))
+    const parsed = parseGlyphs(glyphs, content.items.map(x => 'str' in x ? x.str : '').join(' ')); const d13 = parsed.candidates.find(x => x.number === 'D13')!
+    expect(d13.shifts).toEqual([]); expect(d13.leaveDates).toHaveLength(31); expect(d13.leaveCodes['2026-08-01']).toBe('LHPu')
+  })
 })
