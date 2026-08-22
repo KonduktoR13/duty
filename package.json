@@ -1,0 +1,9 @@
+{
+  "name": "my-shifts-pwa",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": { "dev": "vite", "build": "tsc --noEmit && vite build", "test": "vitest run", "test:watch": "vitest" },
+  "dependencies": { "pdfjs-dist": "4.10.38" },
+  "devDependencies": { "@types/node": "22.10.5", "@vitejs/plugin-legacy": "6.1.1", "typescript": "5.7.3", "vite": "6.0.7", "vite-plugin-pwa": "0.21.1", "vitest": "2.1.8", "fake-indexeddb": "6.0.0" }
+}

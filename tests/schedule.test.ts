@@ -1,0 +1,6 @@
+import { describe, expect, it } from 'vitest'
+import { normalizeCrossMonth, timeLabel } from '../src/schedule'
+import { detectMonth, parseGlyphs } from '../src/parser'
+
+describe('schedule rules',()=>{it('joins 16 at month end and next plain 8',()=>expect(normalizeCrossMonth([{date:'2026-09-30',hours:16,code:'16'},{date:'2026-10-01',hours:8,code:'8'}])).toEqual([{date:'2026-09-30',hours:24,code:'16+8'}]));it('keeps 8P',()=>expect(normalizeCrossMonth([{date:'2026-09-30',hours:16,code:'16'},{date:'2026-10-01',hours:8,code:'8P'}])).toHaveLength(2));it('formats overnight shift',()=>expect(timeLabel({date:'2026-08-21',hours:24,code:'24'})).toBe('с 08:00 21 августа до 08:00 22 августа'))})
+describe('PDF parsing primitives',()=>{it('detects Estonian and Russian months',()=>{expect(detectMonth('Juuni 2026')).toBe('2026-06');expect(detectMonth('сентябрь 2027')).toBe('2027-09')});it('reads row by coordinate cells',()=>{const glyphs:any[]=[];for(let d=1;d<=28;d++)glyphs.push({text:String(d),x:50+d*10,y:10,width:6});glyphs.push(...[{text:'D',x:0,y:30,width:5},{text:'1',x:5,y:30,width:5},{text:'2',x:10,y:30,width:5},{text:'2',x:80,y:30,width:5},{text:'4',x:85,y:30,width:5}]);const p=parseGlyphs(glyphs,'Veebruar 2026');expect(p.candidates[0].number).toBe('D12');expect(p.candidates[0].shifts).toContainEqual({date:'2026-02-03',hours:24,code:'24'})})})
