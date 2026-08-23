@@ -83,12 +83,22 @@ describe.skipIf(!local)('reference Delta PDFs', () => {
   it('preserves rare PDF annotations without treating them as hours', async () => {
     const [aprilSchedule, juneSchedule, augustSchedule] = await Promise.all([parseSource(april), parseSource(june), parseSource(august)])
     const d16 = aprilSchedule.candidates.find(candidate => candidate.number === 'D16')!
-    expect(d16.marks).toContainEqual({ date: '2026-04-13', kind: 'other', raw: '#12' })
+    expect(d16.marks).toContainEqual({ date: '2026-04-13', kind: 'tentative', raw: '#12', hours: 12 })
     expect(d16.marks).toContainEqual({ date: '2026-04-13', kind: 'home', raw: 'V5', hours: 5 })
     const d36 = aprilSchedule.candidates.find(candidate => candidate.number === 'D36')!
     expect(d36.marks).toContainEqual({ date: '2026-04-09', kind: 'other', raw: 'Õ' })
     expect(juneSchedule.candidates.find(candidate => candidate.number === 'D11')!.marks).toContainEqual({ date: '2026-06-01', kind: 'other', raw: 'TK4' })
     expect(augustSchedule.candidates.find(candidate => candidate.number === 'D34')!.marks.some(mark => mark.kind === 'other' && mark.raw === 'P-et')).toBe(true)
+  })
+
+  it('uses 16 only as an end-of-month boundary fragment in the reference PDFs', async () => {
+    const schedules = await Promise.all([april, june, july, august, september].map(parseSource))
+    const fragments = schedules.flatMap(schedule => schedule.candidates.flatMap(candidate => candidate.marks.filter(mark => mark.kind === 'hours' && mark.raw === '16')))
+    expect(fragments.length).toBeGreaterThan(0)
+    expect(fragments.every(mark => {
+      const value = new Date(mark.date + 'T12:00:00')
+      return value.getDate() === new Date(value.getFullYear(), value.getMonth() + 1, 0).getDate()
+    })).toBe(true)
   })
 
   it('keeps D40 ordinary eights as ordinary work codes', async () => {

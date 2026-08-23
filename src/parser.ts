@@ -76,10 +76,16 @@ function parseCell(date: string, value: string): DayMark[] {
   if (leave) return [{ date, kind: 'leave', raw: leave }]
 
   // A cell can contain both a normal day entry and a V-entry on its second
-  // printed line, e.g. 12 + V4 or 8P + V8. Treat # and every unknown code as
-  // an explicit annotation rather than silently inventing working hours.
-  const taggedHoursAndHome = raw.match(/^(#\d+)((?:V\d+(?:[,.]\d+)?)+)$/i)
-  if (taggedHoursAndHome) return [{ date, kind: 'other', raw: taggedHoursAndHome[1] }, ...parseCell(date, taggedHoursAndHome[2])]
+  // printed line, e.g. 12 + V4 or 8P + V8. A leading # means that the work
+  // entry is only possible, not confirmed; keep it separate from any V layer.
+  const tentative = raw.match(/^#(\d+)((?:V\d+(?:[,.]\d+)?)*)$/i)
+  if (tentative) {
+    const hours = Number(tentative[1])
+    const mark: DayMark = hours > 0 && hours <= 48
+      ? { date, kind: 'tentative', raw: `#${tentative[1]}`, hours }
+      : { date, kind: 'other', raw: `#${tentative[1]}` }
+    return tentative[2] ? [mark, ...parseCell(date, tentative[2])] : [mark]
+  }
   const knownWork = /^(?:\d+P?|V\d+(?:[,.]\d+)?)+$/i
   if (!knownWork.test(raw)) {
     const otherAndHome = raw.match(/^(.+?)((?:V\d+(?:[,.]\d+)?)+)$/i)

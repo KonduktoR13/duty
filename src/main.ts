@@ -42,7 +42,7 @@ function blankMonth(id: string): MonthRecord {
 }
 
 function marksForRecord(month: MonthRecord): DayMark[] {
-  if (month.marks) return month.marks
+  if (month.marks) return month.marks.map(migrateMark)
   const work: DayMark[] = month.shifts.map(shift => ({
     date: shift.date,
     kind: /^V\d/i.test(shift.code) ? 'home' : 'hours',
@@ -57,6 +57,15 @@ function marksForRecord(month: MonthRecord): DayMark[] {
   return [...work, ...leave]
 }
 
+function migrateMark(mark: DayMark): DayMark {
+  if (mark.kind !== 'other') return mark
+  const tentative = mark.raw.match(/^#(\d+)$/)
+  const hours = Number(tentative?.[1])
+  return tentative && hours > 0 && hours <= 48
+    ? { date: mark.date, kind: 'tentative', raw: mark.raw, hours }
+    : mark
+}
+
 function allMarks(): DayMark[] {
   const raw = months.flatMap(marksForRecord)
   const normalizedWork = normalizeCrossMonth(raw.filter(isWorkMark).map(mark => ({ date: mark.date, hours: mark.hours, code: mark.raw })))
@@ -67,7 +76,7 @@ function allMarks(): DayMark[] {
 function groupMarks(marks: DayMark[]) {
   const grouped = new Map<string, DayMark[]>()
   for (const mark of marks) grouped.set(mark.date, [...(grouped.get(mark.date) || []), mark])
-  const rank: Record<DayMark['kind'], number> = { hours: 0, home: 1, leave: 2, other: 3 }
+  const rank: Record<DayMark['kind'], number> = { hours: 0, tentative: 1, home: 2, leave: 3, other: 4 }
   for (const values of grouped.values()) values.sort((a, b) => rank[a.kind] - rank[b.kind])
   return grouped
 }
@@ -82,6 +91,13 @@ async function refresh() {
   months = await storage.months()
   let upgraded = false
   legacyNeedsReimport = []
+  for (const month of months.filter(month => month.marks)) {
+    const marks = month.marks!.map(migrateMark)
+    if (marks.some((mark, index) => mark !== month.marks![index])) {
+      await storage.put({ ...month, marks })
+      upgraded = true
+    }
+  }
   for (const month of months.filter(month => !month.marks)) {
     const pdf = await storage.pdf(month.id)
     if (!pdf) {
@@ -128,7 +144,7 @@ function welcome() {
 }
 
 function hero(upcoming: UpcomingDay | undefined) {
-  if (!upcoming) return '<section class="hero"><p>Ближайшая смена</p><h2>График не загружен</h2><span>Добавьте следующий месячный PDF</span></section>'
+  if (!upcoming) return '<section class="hero"><p>Ближайшая смена</p><h2>Нет подтверждённых смен</h2><span>Возможные выходы с # остаются отмечены в календаре.</span></section>'
   const codes = upcoming.marks.map(displayCode).join(' + ')
   const label = upcoming.marks.length === 1 && upcoming.marks[0].kind === 'hours' && upcoming.marks[0].hours === 24
     ? '24 ч'
@@ -140,11 +156,20 @@ function hero(upcoming: UpcomingDay | undefined) {
 function legacyNotice() {
   if (!legacyNeedsReimport.length) return ''
   const names = legacyNeedsReimport.map(humanMonth).join(', ')
-  return '<aside class="legacy-notice"><b>Нужен повторный импорт PDF</b><span>Для ' + esc(names) + ' старая версия не сохранила оригинал. Загрузите PDF ещё раз, чтобы распознать LHPu, V-коды и другие отметки.</span></aside>'
+  return '<aside class="legacy-notice"><b>Нужен повторный импорт PDF</b><span>Для ' + esc(names) + ' старая версия не сохранила оригинал. Откройте вкладку «Графики» и загрузите PDF ещё раз, чтобы распознать LHPu, V-коды и другие отметки.</span></aside>'
+}
+
+function isMonthBoundaryPart(mark: DayMark) {
+  if (mark.kind !== 'hours' || mark.hours !== 16 || !/^16$/i.test(mark.raw)) return false
+  const value = new Date(mark.date + 'T12:00:00')
+  return value.getDate() === new Date(value.getFullYear(), value.getMonth() + 1, 0).getDate()
 }
 
 function markDescription(mark: DayMark, compact = false) {
   if (mark.kind === 'leave') return mark.raw === 'LHPu' ? 'Отпуск по уходу за ребёнком' : 'Отпуск'
+  if (mark.kind === 'tentative') return compact
+    ? `${mark.raw} · возможный выход`
+    : `Возможный выход на работу · ${hoursText(mark.hours)} · ещё не подтверждён`
   if (mark.kind === 'other') return compact ? `Код ${mark.raw}` : `Прочая отметка из PDF · код ${mark.raw}`
   if (mark.kind === 'home') return compact
     ? `${mark.raw} · дома`
@@ -155,19 +180,28 @@ function markDescription(mark: DayMark, compact = false) {
   if (mark.hours === 12) return compact
     ? '12 ч на месте'
     : 'Дневной график · 12 ч на месте 08:00–20:00 · код 12'
+  if (isMonthBoundaryPart(mark)) return compact
+    ? '16 ч · часть смены на границе месяца'
+    : 'Часть смены на границе месяца · в этом PDF указано 16 ч; продолжение сверяется со следующим месяцем'
   return compact ? `${hoursText(mark.hours)} · код ${mark.raw}` : `${hoursText(mark.hours)} · код графика ${mark.raw}`
 }
 
 function dayTone(marks: DayMark[]) {
   const has24 = marks.some(mark => mark.kind === 'hours' && mark.hours === 24)
-  const hasDay = marks.some(mark => mark.kind === 'hours' && mark.hours !== 24)
+  const hasBoundary = marks.some(isMonthBoundaryPart)
+  const hasDay = marks.some(mark => mark.kind === 'hours' && mark.hours !== 24 && !isMonthBoundaryPart(mark))
+  const hasTentative = marks.some(mark => mark.kind === 'tentative')
   const hasHome = marks.some(mark => mark.kind === 'home')
   const hasOther = marks.some(mark => mark.kind === 'other')
   const leave = marks.find((mark): mark is Extract<DayMark, { kind: 'leave' }> => mark.kind === 'leave')
   if (has24 && hasHome) return 'mixed-duty-home'
   if (hasDay && hasHome) return 'mixed-day-home'
+  if (hasTentative && hasHome) return 'mixed-tentative-home'
+  if (hasDay && hasTentative) return 'mixed-day-tentative'
   if (has24) return 'duty-24'
+  if (hasBoundary) return 'boundary-shift'
   if (hasDay) return 'day-schedule'
+  if (hasTentative) return 'tentative-shift'
   if (hasHome && hasOther) return 'mixed-home-other'
   if (hasHome) return 'home-duty'
   if (leave?.raw === 'LHPu') return 'leave-childcare'
@@ -213,7 +247,8 @@ function selectedDetails(marksByDate: Map<string, DayMark[]>) {
   const onlyHome = hasHome && marks.every(mark => mark.kind === 'home' || mark.kind === 'other')
   const onlyLeave = marks.every(mark => mark.kind === 'leave')
   const onlyOther = marks.every(mark => mark.kind === 'other')
-  const icon = onlyLeave ? '☼' : onlyHome ? '⌂' : onlyOther ? '⋯' : '◷'
+  const onlyTentative = marks.every(mark => mark.kind === 'tentative')
+  const icon = onlyLeave ? '☼' : onlyHome ? '⌂' : onlyTentative ? '?' : onlyOther ? '⋯' : '◷'
   const lines = marks.map(mark => '<div class="detail-line ' + mark.kind + '"><i></i><div><b>' + esc(displayCode(mark)) + '</b><span>' + esc(markDescription(mark)) + '</span></div></div>').join('')
   return '<section class="shift-details" id="shift-details"><div class="detail-icon">' + icon + '</div><div class="detail-content"><b>' + date(selectedDate) + '</b><div class="detail-lines">' + lines + '</div></div></section>'
 }
@@ -223,13 +258,13 @@ function monthView(month: MonthRecord) {
   return '<nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav><section class="calendar" id="calendar"><div class="week">' +
     ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => '<span>' + day + '</span>').join('') +
     '</div><div class="calendar-viewport" id="calendar-viewport"><div class="calendar-track" id="calendar-track">' + calendarPage(month, marksByDate) +
-    '</div></div><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot daytime"></i>8 / 12 / 16 ч · дневной график</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></section>' +
-    selectedDetails(marksByDate) + '<button class="add" id="import">＋ <span>Импортировать PDF</span></button>'
+    '</div></div><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></section>' +
+    selectedDetails(marksByDate)
 }
 
 function documentsView() {
   const rows = months.length
-    ? months.map(month => '<article data-open-pdf="' + month.id + '" role="button" tabindex="0" aria-label="Открыть PDF ' + esc(month.fileName) + '"><div class="doc-icon">▤</div><div><b>' + humanMonth(month.id) + '</b><span>' + esc(month.fileName) + '</span><small>' + month.shifts.length + ' рабочих отметок · загружен ' + new Date(month.importedAt).toLocaleDateString('ru-RU') + '</small></div><button class="delete-month" data-delete-month="' + month.id + '" aria-label="Удалить ' + humanMonth(month.id) + '">⌫</button></article>').join('')
+    ? months.map(month => '<article data-open-pdf="' + month.id + '" role="button" tabindex="0" aria-label="Открыть PDF ' + esc(month.fileName) + '"><div class="doc-icon">▤</div><div><b>' + humanMonth(month.id) + '</b><span>' + esc(month.fileName) + '</span><small>' + month.shifts.length + ' подтверждённых рабочих отметок · загружен ' + new Date(month.importedAt).toLocaleDateString('ru-RU') + '</small></div><button class="delete-month" data-delete-month="' + month.id + '" aria-label="Удалить ' + humanMonth(month.id) + '">⌫</button></article>').join('')
     : '<p>Графики ещё не импортированы.</p>'
   return '<section class="documents-intro"><p>Оригинальные PDF и графики хранятся только на этом устройстве. Нажмите график, чтобы открыть его.</p><button class="primary" id="import">Импортировать PDF</button></section><h2 class="list-title">Загруженные графики</h2><section class="documents">' + rows + '</section><p class="documents-hint">Повторный импорт заменяет только соответствующий месяц и не создаёт дублей.</p>'
 }
@@ -478,7 +513,8 @@ async function chooseDelta(parsed: ParsedSchedule) {
   }
   const choices = parsed.candidates.map(candidate => {
     const workCount = candidate.marks.filter(isWorkMark).length
-    return '<button data-delta="' + candidate.number + '" class="choice ' + (candidate.number === preferred ? 'recommended' : '') + '"><b>' + candidate.number + '</b><span>' + workCount + ' рабочих отметок' + (candidate.leaveDates.length ? ' · отпуск ' + candidate.leaveDates.length + ' дн.' : '') + (candidate.number === preferred ? ' · использовали раньше' : '') + '</span></button>'
+    const tentativeCount = candidate.marks.filter(mark => mark.kind === 'tentative').length
+    return '<button data-delta="' + candidate.number + '" class="choice ' + (candidate.number === preferred ? 'recommended' : '') + '"><b>' + candidate.number + '</b><span>' + workCount + ' подтверждённых рабочих отметок' + (tentativeCount ? ' · возможных ' + tentativeCount : '') + (candidate.leaveDates.length ? ' · отпуск ' + candidate.leaveDates.length + ' дн.' : '') + (candidate.number === preferred ? ' · использовали раньше' : '') + '</span></button>'
   }).join('')
   open('<h2>Чей это график?</h2><p>' + humanMonth(parsed.month) + ' · найдены номера из PDF. ' + parsed.warnings.join(' ') + '</p><div class="choices">' + choices + '</div><button class="primary" id="cancel">Отмена</button>')
   document.querySelectorAll<HTMLButtonElement>('[data-delta]').forEach(button => button.onclick = () => savePick(parsed.candidates.find(candidate => candidate.number === button.dataset.delta)!))
@@ -518,7 +554,7 @@ async function digest(file: File) {
 }
 
 function showMonths() {
-  const choices = months.map(month => '<button class="choice" data-month="' + month.id + '"><b>' + humanMonth(month.id) + '</b><span>' + esc(month.fileName) + ' · ' + month.shifts.length + ' рабочих отметок</span></button>').join('')
+  const choices = months.map(month => '<button class="choice" data-month="' + month.id + '"><b>' + humanMonth(month.id) + '</b><span>' + esc(month.fileName) + ' · ' + month.shifts.length + ' подтверждённых рабочих отметок</span></button>').join('')
   open('<h2>Загруженные месяцы</h2><div class="choices">' + choices + '</div><button class="primary" id="close">Закрыть</button>')
   document.querySelectorAll<HTMLElement>('[data-month]').forEach(item => item.addEventListener('click', () => {
     selected = item.dataset.month!

@@ -89,4 +89,20 @@ describe('PDF parsing primitives', () => {
       expect(d13.marks).toEqual([])
     }
   })
+
+  it('keeps # hours as a possible, unconfirmed work entry', () => {
+    const glyphs: any[] = []
+    for (let day = 1; day <= 28; day++) glyphs.push({ text: String(day), x: 50 + day * 10, y: 10, width: 6 })
+    glyphs.push(...[
+      { text: 'D12', x: 0, y: 30, width: 16 },
+      { text: '#12', x: 60, y: 30, width: 14 },
+      { text: 'V5', x: 60, y: 40, width: 10 },
+    ])
+    const candidate = parseGlyphs(glyphs, 'Veebruar 2026').candidates[0]
+    expect(candidate.marks).toEqual([
+      { date: '2026-02-01', kind: 'tentative', raw: '#12', hours: 12 },
+      { date: '2026-02-01', kind: 'home', raw: 'V5', hours: 5 },
+    ])
+    expect(candidate.shifts).toEqual([{ date: '2026-02-01', hours: 5, code: 'V5' }])
+  })
 })
