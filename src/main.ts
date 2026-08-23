@@ -250,7 +250,7 @@ function selectedDetails(marksByDate: Map<string, DayMark[]>) {
   const onlyTentative = marks.every(mark => mark.kind === 'tentative')
   const icon = onlyLeave ? '☼' : onlyHome ? '⌂' : onlyTentative ? '?' : onlyOther ? '⋯' : '◷'
   const lines = marks.map(mark => '<div class="detail-line ' + mark.kind + '"><i></i><div><b>' + esc(displayCode(mark)) + '</b><span>' + esc(markDescription(mark)) + '</span></div></div>').join('')
-  return '<section class="shift-details" id="shift-details"><div class="detail-icon">' + icon + '</div><div class="detail-content"><b>' + date(selectedDate) + '</b><div class="detail-lines">' + lines + '</div></div></section>'
+  return '<section class="shift-details" id="shift-details" aria-label="Информация за ' + esc(date(selectedDate)) + '"><i class="detail-handle" aria-hidden="true"></i><div class="detail-icon">' + icon + '</div><div class="detail-content"><b>' + date(selectedDate) + '</b><div class="detail-lines">' + lines + '</div></div><button class="detail-close" id="detail-close" aria-label="Закрыть информацию о дне">×</button></section>'
 }
 
 function monthView(month: MonthRecord) {
@@ -315,13 +315,16 @@ function bind() {
     const button = event.target.closest<HTMLButtonElement>('[data-day]')
     if (button) selectDay(button.dataset.day!)
   })
+  document.querySelector('#detail-close')?.addEventListener('click', () => {
+    selectedDate = null
+    render()
+  })
   enableCalendarSwipe()
 }
 
 function selectDay(value: string) {
   selectedDate = selectedDate === value ? null : value
   render()
-  if (selectedDate) setTimeout(() => document.querySelector('#shift-details')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }), 20)
 }
 
 function prepareMonthTransition(direction: -1 | 1): PreparedMonthTransition | null {

@@ -83,8 +83,10 @@ header { display:flex; align-items:center; justify-content:space-between; margin
 .vacation { background:linear-gradient(135deg,#467a9a 0 50%,#6d5b9b 50%); }
 .annotation { background:#5b6470; }
 
-.shift-details { display:flex; gap:12px; align-items:flex-start; margin:12px 0; border:1px solid #e1d3e7; border-radius:20px; padding:16px; background:#eee4f3; box-shadow:0 10px 28px #3d194719; transform-origin:50% 0; animation:details-in 380ms cubic-bezier(.2,.82,.25,1) both; }
-@keyframes details-in { from { opacity:0; transform:translateY(18px) scale(.97); } to { opacity:1; transform:translateY(0) scale(1); } }
+.shift-details { position:fixed; z-index:5; bottom:max(72px,calc(64px + env(safe-area-inset-bottom))); left:50%; display:flex; width:min(644px,calc(100% - 24px)); max-height:calc(100dvh - 150px); gap:12px; align-items:flex-start; overflow:auto; border:1px solid #e1d3e7; border-radius:22px; padding:22px 50px 17px 16px; background:#eee4f3; box-shadow:0 16px 44px #24102f55; transform:translateX(-50%); transform-origin:50% 100%; animation:details-in 420ms cubic-bezier(.16,.86,.24,1) both; }
+@keyframes details-in { from { opacity:0; transform:translate(-50%,calc(100% + 22px)) scale(.98); } to { opacity:1; transform:translateX(-50%) scale(1); } }
+.detail-handle { position:absolute; top:7px; left:50%; width:38px; height:4px; border-radius:4px; background:#bbaabd; transform:translateX(-50%); }
+.detail-close { position:absolute; top:11px; right:11px; display:grid; width:34px; height:34px; place-items:center; border-radius:50%; background:#ded0e4; color:#3e3044; font-size:24px; line-height:1; }
 .detail-icon,.doc-icon { display:grid; width:42px; height:42px; flex:0 0 auto; place-items:center; border-radius:50%; background:#582c76; color:#fff; font-size:22px; }
 .detail-content { min-width:0; flex:1; }
 .detail-content>b { display:block; }
@@ -159,7 +161,9 @@ dialog>button,.calendar-button { margin-top:16px; border-radius:12px; padding:12
   .week span,.legend,.documents span,.documents small,.documents-hint,.brand small,.welcome p,.welcome small { color:#ded1e1; }
   .legacy-notice { border-color:#b27c29; background:#49351d; color:#fff0cf; }
   .documents article { border-color:#4a3d50; }
-  .shift-details { border-color:#55465c; background:#3b3040; }
+  .shift-details { border-color:#6a586f; background:#3b3040; }
+  .detail-handle { background:#8c788f; }
+  .detail-close { background:#57475c; color:#fff; }
   .detail-line span,dialog p { color:#eee2f0; }
   dialog>button,.calendar-button { background:#e8dcea; color:#261d2b; }
   .choice { border-color:#8c7498; background:#392d40; color:#fff; }
