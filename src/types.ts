@@ -39,6 +39,8 @@ export type CalendarMonthSync = {
 export type GoogleIntegrationSettings = {
   enabled: boolean
   accountProfileId?: string
+  accountEmail?: string
+  accountProfiles?: Record<string, string>
   connectedAt?: number
   lastSyncAt?: number
   lastSyncByAccount?: Record<string, number>

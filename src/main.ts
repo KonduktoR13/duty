@@ -3,8 +3,8 @@ import { storage } from './db'
 import { parsePdf } from './parser'
 import { allMarksForDelta, candidateForMonth, candidatesForMonth, foreignEntriesByDate, isWorkMark, knownDeltaNumbers, migrateMark, type ForeignDayEntry, type WorkMark } from './roster'
 import { applyCalendarSync, auditCalendarSync, buildCalendarDrafts, calendarSyncId, planCalendarSync, syncForAccount, syncSummary, type RemoteAudit } from './calendar-sync'
-import { clearGoogleAccessToken, deterministicGoogleEventId, discoverDutyAccounts, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess } from './google-calendar'
-import { createGoogleAccountProfileId, resolveGoogleAccountProfile } from './google-account'
+import { clearGoogleAccessToken, deterministicGoogleEventId, discoverDutyAccounts, getGoogleAccountEmail, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess, setGoogleLoginHint } from './google-calendar'
+import { createGoogleAccountProfileId, googleEmailKey, resolveGoogleEmailProfile } from './google-account'
 import { humanMonth, timeLabel } from './schedule'
 import type { CalendarMonthSync, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
 import './style.css'
@@ -89,6 +89,7 @@ async function refresh() {
     }
     calendarSyncs = migrated
   }
+  setGoogleLoginHint(googleSettings.enabled ? googleSettings.accountEmail : undefined)
   currentDelta = await storage.setting<string>('deltaNumber') || currentDelta
   let upgraded = false
   legacyNeedsReimport = []
@@ -302,16 +303,21 @@ function currentAccountSyncs() {
 }
 
 async function activateGoogleAccount(explicitSwitch: boolean) {
+  const accountEmail = await getGoogleAccountEmail()
   const discovery = await discoverDutyAccounts()
   const previous = googleSettings.accountProfileId
-  const accountProfileId = resolveGoogleAccountProfile(previous, explicitSwitch, discovery, calendarSyncs) || createGoogleAccountProfileId()
+  const accountProfileId = resolveGoogleEmailProfile(accountEmail, googleSettings, explicitSwitch, discovery, calendarSyncs) || createGoogleAccountProfileId()
+  const accountProfiles = { ...(googleSettings.accountProfiles || {}), [googleEmailKey(accountEmail)]: accountProfileId }
   googleSettings = {
     ...googleSettings,
     enabled: true,
     connectedAt: googleSettings.connectedAt || Date.now(),
     accountProfileId,
+    accountEmail,
+    accountProfiles,
   }
   await storage.set('googleIntegration', googleSettings)
+  setGoogleLoginHint(accountEmail)
   return previous !== accountProfileId
 }
 
@@ -866,10 +872,10 @@ function showImportedSyncChanges(month: string) {
 function showSettings() {
   const tracked = currentAccountSyncs().reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
   const trackedAcrossAccounts = calendarSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
-  const googleLabel = googleSettings.enabled ? 'Подключено' : 'Не подключено'
+  const googleLabel = googleSettings.enabled ? `${googleSettings.accountEmail || 'аккаунт определяется'} · Подключено` : 'Не подключено'
   const accountLastSync = googleSettings.accountProfileId ? googleSettings.lastSyncByAccount?.[googleSettings.accountProfileId] : undefined
   const lastSync = accountLastSync ? new Date(accountLastSync).toLocaleString('ru-RU') : 'синхронизаций ещё не было'
-  open('<h2>Настройки</h2><p>Данные графиков хранятся в IndexedDB только на этом устройстве.</p><button class="calendar-button" id="delta-settings">Текущий D-номер <span>' + esc(currentDelta || 'не выбран') + '</span></button><button class="calendar-button" id="google-settings">Google Calendar <span>' + googleLabel + '</span></button><small class="settings-note">Последняя синхронизация: ' + esc(lastSync) + (tracked ? ' · управляемых событий: ' + tracked : '') + '</small><button class="danger" id="wipe">Удалить все локальные данные</button><button class="primary" id="close">Закрыть</button>')
+  open('<h2>Настройки</h2><p>Данные графиков хранятся в IndexedDB только на этом устройстве.</p><button class="calendar-button" id="delta-settings">Текущий D-номер <span>' + esc(currentDelta || 'не выбран') + '</span></button><button class="calendar-button google-settings-card" id="google-settings"><b>Google Calendar</b><span>' + esc(googleLabel) + '</span><small>Последняя синхронизация: ' + esc(lastSync) + (tracked ? ' · управляемых событий: ' + tracked : '') + '</small></button><button class="danger" id="wipe">Удалить все локальные данные</button><button class="primary" id="close">Закрыть</button>')
   document.querySelector('#close')?.addEventListener('click', close)
   document.querySelector('#delta-settings')?.addEventListener('click', showDeltaSettings)
   document.querySelector('#google-settings')?.addEventListener('click', showGoogleSettings)
@@ -879,6 +885,7 @@ function showSettings() {
       await storage.clear()
       currentDelta = ''
       googleSettings = { enabled: false }
+      setGoogleLoginHint(undefined)
       close()
       await refresh()
     }
@@ -919,16 +926,19 @@ function showGoogleSettings() {
   const records = currentAccountSyncs().filter(sync => Object.keys(sync.events).length)
   const eventCount = records.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
   const status = googleSettings.enabled
-    ? 'Google Calendar подключён. Новый кратковременный токен запрашивается без принудительного выбора аккаунта.'
+    ? '<b>' + esc(googleSettings.accountEmail || 'Аккаунт будет определён при следующей проверке') + '</b> · Подключено'
     : 'Интеграция выключена. Локальные функции работают без Google.'
-  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + (googleSettings.enabled ? '<button class="calendar-button" id="switch-google">Сменить Google-аккаунт <span>выбрать явно</span></button><button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
+  const syncAction = googleSettings.enabled && selected ? '<button class="primary" id="google-sync-current">Проверить / синхронизировать ' + esc(humanMonth(selected)) + '</button>' : ''
+  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + syncAction + (googleSettings.enabled ? '<button class="calendar-button" id="switch-google">Сменить Google-аккаунт <span>выбрать явно</span></button><button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
   document.querySelector('#back')?.addEventListener('click', showSettings)
   document.querySelector('#connect-google')?.addEventListener('click', () => void connectGoogleFromSettings())
   document.querySelector('#switch-google')?.addEventListener('click', () => void switchGoogleAccount())
+  document.querySelector('#google-sync-current')?.addEventListener('click', () => { close(); void beginMonthSync(selected) })
   document.querySelector('#disconnect-google')?.addEventListener('click', async () => {
     await revokeGoogleAccess()
-    googleSettings = { ...googleSettings, enabled: false }
+    googleSettings = { ...googleSettings, enabled: false, accountEmail: undefined }
     await storage.set('googleIntegration', googleSettings)
+    setGoogleLoginHint(undefined)
     showGoogleSettings()
   })
   document.querySelector('#remove-all-google')?.addEventListener('click', () => void removeSyncRecords(records, async () => {}))
@@ -953,7 +963,7 @@ async function switchGoogleAccount() {
         await requestGoogleToken('select_account')
         await activateGoogleAccount(true)
         await refresh()
-        open('<h2>Google-аккаунт выбран</h2><p>Состояние синхронизации пересчитано для выбранного основного календаря. Данные других аккаунтов остались изолированы.</p><button class="primary" id="back">Готово</button>')
+        open('<h2>Google-аккаунт выбран</h2><p><b>' + esc(googleSettings.accountEmail || '') + '</b><br>Состояние синхронизации пересчитано для выбранного основного календаря. Данные других аккаунтов остались изолированы.</p><button class="primary" id="back">Готово</button>')
         document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
       } catch (error) {
         open('<h2>Не удалось сменить аккаунт</h2><p>' + esc(googleErrorText(error)) + '</p><button class="primary" id="back">Понятно</button>')

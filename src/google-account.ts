@@ -1,4 +1,4 @@
-import type { CalendarMonthSync } from './types'
+import type { CalendarMonthSync, GoogleIntegrationSettings } from './types'
 import type { DutyAccountDiscovery } from './google-calendar'
 
 export function createGoogleAccountProfileId() {
@@ -26,4 +26,22 @@ export function resolveGoogleAccountProfile(
   // detected and restored. An explicit account switch instead starts an
   // isolated profile when this Calendar account has no recognizable events.
   return explicitSwitch ? undefined : currentProfileId
+}
+
+export function googleEmailKey(email: string) {
+  return email.trim().toLocaleLowerCase('en-US')
+}
+
+export function resolveGoogleEmailProfile(
+  email: string,
+  settings: GoogleIntegrationSettings,
+  explicitSwitch: boolean,
+  discovery: DutyAccountDiscovery,
+  syncs: CalendarMonthSync[],
+) {
+  const key = googleEmailKey(email)
+  const mapped = settings.accountProfiles?.[key]
+  if (mapped) return mapped
+  if (settings.accountEmail && googleEmailKey(settings.accountEmail) === key && settings.accountProfileId) return settings.accountProfileId
+  return resolveGoogleAccountProfile(settings.accountProfileId, explicitSwitch, discovery, syncs)
 }

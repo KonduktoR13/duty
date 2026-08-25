@@ -2,15 +2,17 @@ import type { CalendarEventDraft } from './types'
 import { CALENDAR_MARKER, type CalendarGateway, type RemoteCalendarEvent } from './calendar-sync'
 
 export const GOOGLE_CLIENT_ID = '985972419123-valpboh05jcstqn7h68qj2d0kql0lfes.apps.googleusercontent.com'
-export const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned'
+export const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned'
+export const GOOGLE_EMAIL_SCOPE = 'https://www.googleapis.com/auth/userinfo.email'
+export const GOOGLE_SCOPE = `${GOOGLE_CALENDAR_SCOPE} ${GOOGLE_EMAIL_SCOPE}`
 
 type TokenResponse = { access_token?: string; expires_in?: number; error?: string; error_description?: string }
-type TokenClient = { requestAccessToken(options?: { prompt?: string }): void }
+type TokenClient = { requestAccessToken(options?: { prompt?: string; login_hint?: string }): void }
 export type GoogleTokenPrompt = '' | 'select_account'
 
 declare global {
   interface Window {
-    google?: { accounts: { oauth2: { initTokenClient(config: { client_id: string; scope: string; prompt?: GoogleTokenPrompt; include_granted_scopes: boolean; callback(response: TokenResponse): void; error_callback?(error: unknown): void }): TokenClient; revoke(token: string, done: () => void): void } } }
+    google?: { accounts: { oauth2: { initTokenClient(config: { client_id: string; scope: string; prompt?: GoogleTokenPrompt; login_hint?: string; include_granted_scopes: boolean; callback(response: TokenResponse): void; error_callback?(error: unknown): void }): TokenClient; revoke(token: string, done: () => void): void } } }
   }
 }
 
@@ -21,6 +23,7 @@ export class GoogleApiError extends Error {
 
 let scriptPromise: Promise<void> | undefined
 let access: { token: string; expiresAt: number } | undefined
+let defaultLoginHint: string | undefined
 
 export function prepareGoogleIdentityServices() {
   if (window.google?.accounts.oauth2) return Promise.resolve()
@@ -41,7 +44,11 @@ export function hasLiveGoogleToken() {
   return Boolean(access && access.expiresAt > Date.now())
 }
 
-export async function requestGoogleToken(prompt: GoogleTokenPrompt = ''): Promise<string> {
+export function setGoogleLoginHint(email?: string) {
+  defaultLoginHint = email
+}
+
+export async function requestGoogleToken(prompt: GoogleTokenPrompt = '', loginHint = defaultLoginHint): Promise<string> {
   if (prompt === 'select_account') access = undefined
   if (access && access.expiresAt > Date.now()) return access.token
   await prepareGoogleIdentityServices()
@@ -50,6 +57,7 @@ export async function requestGoogleToken(prompt: GoogleTokenPrompt = ''): Promis
       client_id: GOOGLE_CLIENT_ID,
       scope: GOOGLE_SCOPE,
       prompt,
+      ...(prompt === '' && loginHint ? { login_hint: loginHint } : {}),
       include_granted_scopes: true,
       callback: response => {
         if (!response.access_token || response.error) {
@@ -61,8 +69,26 @@ export async function requestGoogleToken(prompt: GoogleTokenPrompt = ''): Promis
       },
       error_callback: () => reject(new GoogleAuthError('Авторизация Google была закрыта или заблокирована')),
     })
-    client.requestAccessToken({ prompt })
+    client.requestAccessToken({ prompt, ...(prompt === '' && loginHint ? { login_hint: loginHint } : {}) })
   })
+}
+
+export async function getGoogleAccountEmail() {
+  const token = await requestGoogleToken('', defaultLoginHint)
+  let response: Response
+  try {
+    response = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', { headers: { Authorization: `Bearer ${token}` } })
+  } catch {
+    throw new TypeError('offline')
+  }
+  if (response.status === 401) {
+    access = undefined
+    throw new GoogleAuthError('Google требует повторную авторизацию')
+  }
+  if (!response.ok) throw new GoogleApiError(`Google UserInfo API: ${response.status}`, response.status)
+  const result = await response.json() as { email?: string; verified_email?: boolean }
+  if (!result.email) throw new GoogleAuthError('Google не вернул email выбранного аккаунта')
+  return result.email
 }
 
 export function clearGoogleAccessToken() {
