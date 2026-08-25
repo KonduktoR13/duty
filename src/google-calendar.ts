@@ -92,21 +92,54 @@ async function api(path: string, init: RequestInit = {}, allowMissing = false) {
   return response.status === 204 ? null : response.json()
 }
 
+export function googleEventPayload(eventId: string | undefined, draft: CalendarEventDraft, properties: Record<string, string>) {
+  return {
+    ...(eventId ? { id: eventId } : {}),
+    summary: draft.summary,
+    description: draft.description,
+    status: 'confirmed' as const,
+    transparency: 'opaque' as const,
+    start: draft.start,
+    end: draft.end,
+    extendedProperties: { private: properties },
+  }
+}
+
 function body(eventId: string | undefined, draft: CalendarEventDraft, properties: Record<string, string>) {
-  return JSON.stringify({ ...(eventId ? { id: eventId } : {}), summary: draft.summary, description: draft.description, start: draft.start, end: draft.end, extendedProperties: { private: properties } })
+  return JSON.stringify(googleEventPayload(eventId, draft, properties))
+}
+
+export function collisionGoogleEventId(eventId: string, attempt: number) {
+  if (attempt === 0) return eventId
+  const suffix = attempt.toString(16)
+  return eventId.slice(0, 1024 - suffix.length) + suffix
+}
+
+function ownsEvent(event: RemoteCalendarEvent, properties: Record<string, string>) {
+  return Object.entries(properties).every(([key, value]) => event.extendedProperties?.private?.[key] === value)
 }
 
 export const googleCalendarGateway: CalendarGateway = {
-  get: eventId => api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, {}, true) as Promise<RemoteCalendarEvent | null>,
+  get: async eventId => {
+    const event = await api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, {}, true) as RemoteCalendarEvent | null
+    return event?.status === 'cancelled' ? null : event
+  },
   insert: async (eventId, draft, properties) => {
-    try {
-      return await api('/calendars/primary/events', { method: 'POST', body: body(eventId, draft, properties) }) as RemoteCalendarEvent
-    } catch (error) {
-      if (!(error instanceof GoogleApiError) || error.status !== 409) throw error
-      const existing = await api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, {}, true) as RemoteCalendarEvent | null
-      if (!existing || Object.entries(properties).some(([key, value]) => existing.extendedProperties?.private?.[key] !== value)) throw error
-      return await api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, { method: 'PATCH', headers: existing.etag ? { 'If-Match': existing.etag } : {}, body: body(undefined, draft, properties) }) as RemoteCalendarEvent
+    for (let attempt = 0; attempt < 16; attempt += 1) {
+      const candidateId = collisionGoogleEventId(eventId, attempt)
+      try {
+        return await api('/calendars/primary/events', { method: 'POST', body: body(candidateId, draft, properties) }) as RemoteCalendarEvent
+      } catch (error) {
+        if (!(error instanceof GoogleApiError) || error.status !== 409) throw error
+        const existing = await api(`/calendars/primary/events/${encodeURIComponent(candidateId)}`, {}, true) as RemoteCalendarEvent | null
+        // Google keeps deleted event IDs as cancelled tombstones. Reusing such an ID
+        // can return success while the event remains invisible, so use the next ID.
+        if (!existing || existing.status === 'cancelled') continue
+        if (!ownsEvent(existing, properties)) throw error
+        return await api(`/calendars/primary/events/${encodeURIComponent(candidateId)}`, { method: 'PATCH', headers: existing.etag ? { 'If-Match': existing.etag } : {}, body: body(undefined, draft, properties) }) as RemoteCalendarEvent
+      }
     }
+    throw new GoogleApiError('Google Calendar не освободил идентификатор удалённого события', 409)
   },
   patch: (eventId, draft, properties, etag) => api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, { method: 'PATCH', headers: etag ? { 'If-Match': etag } : {}, body: body(undefined, draft, properties) }) as Promise<RemoteCalendarEvent>,
   remove: (eventId, etag) => api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, { method: 'DELETE', headers: etag ? { 'If-Match': etag } : {} }, true).then(() => undefined),

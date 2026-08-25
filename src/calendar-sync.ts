@@ -14,6 +14,8 @@ export type SyncPlan = {
 export type RemoteCalendarEvent = {
   id: string
   etag?: string
+  status?: 'confirmed' | 'tentative' | 'cancelled'
+  transparency?: 'opaque' | 'transparent'
   updated?: string
   summary?: string
   description?: string

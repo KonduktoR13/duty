@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { applyCalendarSync, auditRemoteEvent, buildCalendarDrafts, planCalendarSync, privateProperties, type CalendarGateway, type RemoteCalendarEvent } from '../src/calendar-sync'
+import { collisionGoogleEventId, googleEventPayload } from '../src/google-calendar'
 import type { CalendarMonthSync, SyncedCalendarEvent } from '../src/types'
 
 const month = '2026-08'
@@ -24,6 +25,28 @@ describe('Google Calendar sync model', () => {
     expect(drafts[0]).toMatchObject({ key: '2026-08-03:hours:1', start: { dateTime: '2026-08-03T08:00:00' }, end: { dateTime: '2026-08-04T08:00:00' } })
     const office = buildCalendarDrafts(month, 'D40', [{ date: '2026-08-05', kind: 'hours', raw: '8', hours: 8 }])[0]
     expect(office).toMatchObject({ start: { dateTime: '2026-08-05T08:00:00' }, end: { dateTime: '2026-08-05T16:00:00' } })
+  })
+
+  it('sends shifts as confirmed busy time instead of all-day or free events', () => {
+    const draft = buildCalendarDrafts(month, delta, [{ date: '2026-08-03', kind: 'hours', raw: '24', hours: 24 }])[0]
+    const payload = googleEventPayload('event1', draft, privateProperties(month, delta, draft.key))
+    expect(payload).toMatchObject({
+      id: 'event1',
+      status: 'confirmed',
+      transparency: 'opaque',
+      start: { dateTime: '2026-08-03T08:00:00', timeZone: 'Europe/Tallinn' },
+      end: { dateTime: '2026-08-04T08:00:00', timeZone: 'Europe/Tallinn' },
+    })
+    expect(payload.start).not.toHaveProperty('date')
+    expect(payload.end).not.toHaveProperty('date')
+  })
+
+  it('uses a new valid deterministic id after a deleted-event tombstone collision', () => {
+    const original = 'd17a0123456789abcdef0123456789abcdef01234567'
+    expect(collisionGoogleEventId(original, 0)).toBe(original)
+    expect(collisionGoogleEventId(original, 1)).toBe(original + '1')
+    expect(collisionGoogleEventId(original, 2)).toBe(original + '2')
+    expect(collisionGoogleEventId(original, 1)).toMatch(/^[a-v0-9]{5,1024}$/)
   })
 
   it('produces an idempotent add/change/remove diff', () => {
