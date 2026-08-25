@@ -36,6 +36,8 @@ let legacyNeedsReimport: string[] = []
 let calendarSyncs: CalendarMonthSync[] = []
 let googleSettings: GoogleIntegrationSettings = { enabled: false }
 let highlightSyncOffer = false
+let legendExpanded = false
+let lastRenderedSection: 'calendar' | 'documents' = section
 
 const localDateId = (value = new Date()) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-')
 const todayId = () => localDateId()
@@ -134,20 +136,27 @@ async function refresh() {
 }
 
 function render() {
+  const previousScroll = document.querySelector<HTMLElement>('.app-content')?.scrollTop || 0
+  const restoreScroll = lastRenderedSection === section ? previousScroll : 0
+  lastRenderedSection = section
   const current = months.find(month => month.id === selected) || blankMonth(selected)
   const mainContent = section === 'documents'
     ? documentsView()
     : !months.length
       ? welcome()
       : hero(upcomingDay()) + legacyNotice() + monthView(current)
-  app.innerHTML = '<main><header><div class="brand"><span>▣</span><div><h1>' +
+  app.innerHTML = '<div class="app-shell"><header><div class="header-inner"><div class="brand"><span>▣</span><div><h1>' +
     (section === 'calendar' ? 'Мои смены' : 'Графики') + '</h1><small>' +
     (section === 'calendar' ? 'Только на этом устройстве' : 'Источники данных календаря') +
-    '</small></div></div><button class="icon" id="settings" aria-label="Настройки">⚙</button></header>' +
+    '</small></div></div><button class="icon" id="settings" aria-label="Настройки">⚙</button></div></header><main class="app-content">' +
     mainContent + '</main><nav class="tabs" aria-label="Разделы"><button data-section="calendar" class="' +
     (section === 'calendar' ? 'active' : '') + '">▣<span>Календарь</span></button><button data-section="documents" class="' +
-    (section === 'documents' ? 'active' : '') + '">▤<span>Графики</span></button></nav><input id="file" type="file" accept="application/pdf,.pdf" hidden><dialog id="dialog"></dialog>'
+    (section === 'documents' ? 'active' : '') + '">▤<span>Графики</span></button></nav></div><input id="file" type="file" accept="application/pdf,.pdf" hidden><dialog id="dialog"></dialog>'
   bind()
+  requestAnimationFrame(() => {
+    const content = document.querySelector<HTMLElement>('.app-content')
+    if (content) content.scrollTop = restoreScroll
+  })
 }
 
 function welcome() {
@@ -155,13 +164,13 @@ function welcome() {
 }
 
 function hero(upcoming: UpcomingDay | undefined) {
-  if (!upcoming) return '<section class="hero"><p>Ближайшая смена</p><h2>Нет подтверждённых смен</h2><span>Возможные выходы с # остаются отмечены в календаре.</span></section>'
+  if (!upcoming) return '<section class="hero hero-empty"><div class="hero-copy"><p>Ближайшая смена</p><h2>Нет подтверждённых смен</h2><span>Возможные выходы с # остаются отмечены в календаре.</span></div></section>'
   const codes = upcoming.marks.map(displayCode).join(' + ')
   const label = upcoming.marks.length === 1 && upcoming.marks[0].kind === 'hours' && upcoming.marks[0].hours === 24
     ? '24 ч'
     : codes
   const description = upcoming.marks.map(mark => markDescription(mark, true)).join(' · ')
-  return '<section class="hero"><p>Ближайшая смена</p><h2>' + date(upcoming.date) + '</h2><strong>' + esc(label) + '</strong><span>' + esc(description) + '</span></section>'
+  return '<section class="hero"><div class="hero-copy"><p>Ближайшая смена</p><h2>' + date(upcoming.date) + '</h2><span>' + esc(description) + '</span></div><strong class="hero-code">' + esc(label) + '</strong></section>'
 }
 
 function legacyNotice() {
@@ -248,7 +257,7 @@ function calendarPage(month: MonthRecord, marksByDate: Map<string, DayMark[]>, s
     const hasColleagues = !marks.length && (foreignByDate.get(dateKey)?.length || 0) > 0
     if (!marks.length) {
       const label = hasColleagues ? `${date(dateKey)}: есть смены других D-номеров` : `${date(dateKey)}: нет смен`
-      cells.push('<button class="day day-empty ' + (hasColleagues ? 'has-colleagues ' : '') + (selectedDate === dateKey ? 'selected ' : '') + (dateKey === currentDay ? 'today' : '') + '" data-day="' + dateKey + '" aria-label="' + esc(label) + '"><b>' + day + '</b>' + (hasColleagues ? '<i class="colleague-dot" aria-hidden="true"></i>' : '') + '</button>')
+      cells.push('<button class="day day-empty ' + (hasColleagues ? 'has-colleagues ' : '') + (selectedDate === dateKey ? 'selected ' : '') + (dateKey === currentDay ? 'today' : '') + '" data-day="' + dateKey + '"' + (dateKey === currentDay ? ' aria-current="date"' : '') + ' aria-label="' + esc(label) + '"><b>' + day + '</b>' + (hasColleagues ? '<i class="colleague-dot" aria-hidden="true"></i>' : '') + '</button>')
       continue
     }
     const regularCodes = marks.filter(mark => mark.kind !== 'home').map(displayCode)
@@ -258,7 +267,7 @@ function calendarPage(month: MonthRecord, marksByDate: Map<string, DayMark[]>, s
       ? '<small>' + esc(regularCodes.join('+')) + '</small><em class="home-badge">' + esc(homeCodes.join('+')) + '</em>'
       : '<small>' + esc(code) + '</small>'
     const classes = ['day', dayTone(marks), selectedDate === dateKey ? 'selected' : '', dateKey === currentDay ? 'today' : ''].filter(Boolean).join(' ')
-    cells.push('<button class="' + classes + '" data-day="' + dateKey + '" aria-label="' + esc(dayAria(dateKey, marks)) + '"><b>' + day + '</b>' + codeHtml + '</button>')
+    cells.push('<button class="' + classes + '" data-day="' + dateKey + '"' + (dateKey === currentDay ? ' aria-current="date"' : '') + ' aria-label="' + esc(dayAria(dateKey, marks)) + '"><b>' + day + '</b>' + codeHtml + '</button>')
   }
   while (cells.length < 42) cells.push('<i class="day-blank" aria-hidden="true"></i>')
   return '<div class="calendar-page" data-month="' + month.id + '"><div class="grid">' + cells.join('') + '</div></div>'
@@ -287,10 +296,10 @@ function selectedDetails(marksByDate: Map<string, DayMark[]>, month: MonthRecord
 function monthView(month: MonthRecord) {
   const marksByDate = groupMarks(allMarks())
   const foreignByDate = foreignEntriesByDate(months, month.id, currentDelta)
-  return '<nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav>' + calendarSyncCard(month) + '<section class="calendar" id="calendar"><div class="week">' +
+  return calendarSyncCard(month) + '<section class="calendar-group"><nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav><section class="calendar" id="calendar"><div class="week">' +
     ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => '<span>' + day + '</span>').join('') +
     '</div><div class="calendar-viewport" id="calendar-viewport"><div class="calendar-track" id="calendar-track">' + calendarPage(month, marksByDate, foreignByDate) +
-    '</div></div><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></section>' +
+    '</div></div><div class="legend-section"><button class="legend-toggle" id="legend-toggle" aria-expanded="' + legendExpanded + '" aria-controls="calendar-legend"><span>Легенда</span><small>7 обозначений</small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' + (legendExpanded ? ' expanded' : '') + '" id="calendar-legend"><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></div></div></section></section>' +
     selectedDetails(marksByDate, month, foreignByDate)
 }
 
@@ -358,8 +367,7 @@ function calendarSyncCard(month: MonthRecord) {
     ? `D-номер ${currentDelta} · ${new Date(sync.syncedAt).toLocaleString('ru-RU')}`
     : `${desired.length} подтверждённых событий · основной календарь`
   const disabled = (!candidateAvailable && !sync?.syncedAt) || !navigator.onLine
-  const hasGoogleEvents = Boolean(sync && Object.keys(sync.events).length)
-  return '<aside class="sync-card ' + tone + (highlightSyncOffer ? ' suggested' : '') + '"><div class="sync-mark">G</div><div><b>Google Calendar</b><span class="sync-status"><i></i>' + label + '</span><small>' + esc(details) + '</small></div><div class="sync-actions"><button id="sync-month"' + (disabled ? ' disabled' : '') + '>' + action + '</button>' + (hasGoogleEvents ? '<button id="unsync-month" class="link-danger"' + (!navigator.onLine ? ' disabled' : '') + '>Удалить из Google</button>' : '') + '</div></aside>'
+  return '<aside class="sync-card ' + tone + (highlightSyncOffer ? ' suggested' : '') + '"><div class="sync-mark">G</div><div class="sync-copy"><b>Google Calendar</b><span class="sync-status"><i></i>' + label + '</span><small title="' + esc(details) + '">' + esc(details) + '</small></div><div class="sync-actions"><button id="sync-month"' + (disabled ? ' disabled' : '') + '>' + action + '</button></div></aside>'
 }
 
 function documentsView() {
@@ -390,7 +398,19 @@ function bind() {
   document.querySelector('#picker')?.addEventListener('click', showMonths)
   document.querySelector('#settings')?.addEventListener('click', showSettings)
   document.querySelector('#sync-month')?.addEventListener('click', () => void beginMonthSync(selected))
-  document.querySelector('#unsync-month')?.addEventListener('click', () => void beginRemoveMonthEvents(selected))
+  document.querySelector('#legend-toggle')?.addEventListener('click', event => {
+    legendExpanded = !legendExpanded
+    const button = event.currentTarget as HTMLButtonElement
+    button.setAttribute('aria-expanded', String(legendExpanded))
+    const legend = document.querySelector<HTMLElement>('#calendar-legend')
+    legend?.classList.toggle('expanded', legendExpanded)
+    if (legendExpanded) window.setTimeout(() => {
+      const content = legend?.closest<HTMLElement>('.app-content')
+      if (!content || !legend) return
+      const overflow = legend.getBoundingClientRect().bottom - content.getBoundingClientRect().bottom + 10
+      if (overflow > 0) content.scrollTo({ top: content.scrollTop + overflow, behavior: 'smooth' })
+    }, 330)
+  })
   document.querySelectorAll<HTMLButtonElement>('[data-section]').forEach(button => button.onclick = () => { section = button.dataset.section as 'calendar' | 'documents'; selectedDate = null; render() })
   document.querySelectorAll<HTMLElement>('[data-open-pdf]').forEach(item => {
     const open = () => {
@@ -552,7 +572,6 @@ function enableCalendarSwipe() {
     startAt = event.timeStamp
     horizontal = false
     prepared = null
-    calendar.setPointerCapture(event.pointerId)
   })
   calendar.addEventListener('pointermove', event => {
     if (pointerId !== event.pointerId || monthTransitioning) return
@@ -561,6 +580,7 @@ function enableCalendarSwipe() {
     const dy = event.clientY - startY
     if (!horizontal && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
       horizontal = true
+      calendar.setPointerCapture(event.pointerId)
       const direction = dx < 0 ? 1 : -1
       prepared = prepareMonthTransition(direction)
       if (prepared) {
@@ -925,15 +945,19 @@ async function applyDeltaSwitch(nextDelta: string) {
 function showGoogleSettings() {
   const records = currentAccountSyncs().filter(sync => Object.keys(sync.events).length)
   const eventCount = records.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  const currentRecord = selected ? syncFor(selected) : undefined
+  const currentEventCount = currentRecord ? Object.keys(currentRecord.events).length : 0
   const status = googleSettings.enabled
     ? '<b>' + esc(googleSettings.accountEmail || 'Аккаунт будет определён при следующей проверке') + '</b> · Подключено'
     : 'Интеграция выключена. Локальные функции работают без Google.'
   const syncAction = googleSettings.enabled && selected ? '<button class="primary" id="google-sync-current">Проверить / синхронизировать ' + esc(humanMonth(selected)) + '</button>' : ''
-  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + syncAction + (googleSettings.enabled ? '<button class="calendar-button" id="switch-google">Сменить Google-аккаунт <span>выбрать явно</span></button><button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
+  const removeMonthAction = currentEventCount ? '<button class="calendar-button google-remove-month" id="remove-google-current">Удалить события ' + esc(humanMonth(selected)) + ' из Google <span>локальный график оставить</span></button>' : ''
+  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + syncAction + (googleSettings.enabled ? '<button class="calendar-button" id="switch-google">Сменить Google-аккаунт <span>выбрать явно</span></button><button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + removeMonthAction + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
   document.querySelector('#back')?.addEventListener('click', showSettings)
   document.querySelector('#connect-google')?.addEventListener('click', () => void connectGoogleFromSettings())
   document.querySelector('#switch-google')?.addEventListener('click', () => void switchGoogleAccount())
   document.querySelector('#google-sync-current')?.addEventListener('click', () => { close(); void beginMonthSync(selected) })
+  document.querySelector('#remove-google-current')?.addEventListener('click', () => void beginRemoveMonthEvents(selected))
   document.querySelector('#disconnect-google')?.addEventListener('click', async () => {
     await revokeGoogleAccess()
     googleSettings = { ...googleSettings, enabled: false, accountEmail: undefined }
