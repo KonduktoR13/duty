@@ -166,6 +166,10 @@ header { position:relative; z-index:4; border-bottom:1px solid #e5dce9aa; paddin
 .welcome small { display:block; max-width:310px; margin:18px auto; line-height:1.4; }
 .shield { display:grid; width:70px; height:70px; margin:auto; place-items:center; border-radius:24px; background:#e9d3f3; color:#582c76; font-size:36px; }
 .welcome .primary { width:100%; margin-top:12px; }
+.legal-links,.settings-legal { display:flex; flex-wrap:wrap; justify-content:center; gap:7px 16px; }
+.legal-links { margin-top:22px; }
+.legal-links a,.settings-legal a { color:#65317d; font-size:11px; text-underline-offset:3px; }
+.settings-legal { margin:16px 2px 2px; }
 
 dialog { width:min(440px,calc(100% - 30px)); max-height:calc(100dvh - 30px); overflow:auto; border:0; border-radius:22px; padding:24px; background:#fff; color:#211728; box-shadow:0 20px 60px #0005; }
 dialog::backdrop { background:#24102f88; }
@@ -263,6 +267,7 @@ dialog>button,.calendar-button { margin-top:16px; border-radius:12px; padding:12
   .choice { border-color:#8c7498; background:#392d40; color:#fff; }
   .choice span { color:#eee2f0; }
   .choice.recommended { border-color:#d58def; background:#54245f; }
+  .legal-links a,.settings-legal a { color:#e5a5fa; }
   .sync-warning { border-color:#a87b31; background:#49351d; color:#fff0cf; }
   .sync-preview li { border-color:#4f4255; }
   .sync-preview small { color:#d9ccdc; }
