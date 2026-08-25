@@ -77,7 +77,7 @@ describe('Google Calendar sync model', () => {
     const event = synced('event1')
     const previous = { ...sync({ [event.draft.key]: event }), accountProfileId: 'account-a' }
     const legacy = { id: 'event1', etag: 'old', extendedProperties: { private: privateProperties(month, delta, event.draft.key) } }
-    expect(auditRemoteEvent(previous, event, legacy).status).toBe('changed')
+    expect(auditRemoteEvent(previous, event, legacy).status).toBe('metadata')
     const otherAccount = { ...legacy, extendedProperties: { private: privateProperties(month, delta, event.draft.key, 'account-b') } }
     expect(auditRemoteEvent(previous, event, otherAccount).status).toBe('unsafe')
   })

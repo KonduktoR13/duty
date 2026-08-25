@@ -771,7 +771,8 @@ async function previewMonthSync(month: string, removeAll: boolean, after?: () =>
     const remoteChanged = audits.filter(audit => audit.status === 'changed').length
     const remoteMissing = audits.filter(audit => audit.status === 'missing').length
     const unsafe = audits.filter(audit => audit.status === 'unsafe').length
-    const hasWork = plan.added.length + plan.changed.length + plan.removed.length + remoteChanged + remoteMissing + unsafe > 0
+    const metadata = audits.filter(audit => audit.status === 'metadata').length
+    const hasWork = plan.added.length + plan.changed.length + plan.removed.length + remoteChanged + remoteMissing + unsafe + metadata > 0
     if (!hasWork) {
       if (removeAll) {
         if (previous) await storage.removeSync(previous.id)
@@ -797,9 +798,12 @@ async function previewMonthSync(month: string, removeAll: boolean, after?: () =>
     const unsafeWarning = unsafe
       ? '<aside class="sync-warning"><b>Потеряна метка принадлежности: ' + unsafe + '</b><span>Эти события не будут изменены или удалены. При необходимости PWA создаст безопасную замену.</span></aside>'
       : ''
+    const metadataNotice = metadata
+      ? '<aside class="sync-warning"><b>Обновление связи Google-аккаунта</b><span>Событий: ' + metadata + '. Сами смены не изменились; PWA добавит только новую защищённую метку аккаунта.</span></aside>'
+      : ''
     const title = removeAll ? 'Удалить события из Google?' : 'Подтвердите синхронизацию'
     const rows = previewRows(month, plan)
-    open('<h2>' + title + '</h2><p><b>' + syncSummary(plan) + '</b><br>Основной календарь · ' + esc(currentDelta) + '</p>' + warning + unsafeWarning + (rows ? '<ul class="sync-preview">' + rows + '</ul>' : '') + '<button class="primary" id="apply-sync">' + (removeAll ? 'Удалить отмеченные события' : 'Применить изменения') + '</button><button id="cancel">Отмена</button>')
+    open('<h2>' + title + '</h2><p><b>' + syncSummary(plan) + '</b><br>Основной календарь · ' + esc(currentDelta) + '</p>' + warning + unsafeWarning + metadataNotice + (rows ? '<ul class="sync-preview">' + rows + '</ul>' : '') + '<button class="primary" id="apply-sync">' + (removeAll ? 'Удалить отмеченные события' : 'Применить изменения') + '</button><button id="cancel">Отмена</button>')
     document.querySelector('#cancel')?.addEventListener('click', close)
     document.querySelector<HTMLButtonElement>('#apply-sync')?.addEventListener('click', async event => {
       const button = event.currentTarget as HTMLButtonElement

@@ -26,7 +26,7 @@ export type RemoteCalendarEvent = {
 
 export type RemoteAudit = {
   key: string
-  status: 'ok' | 'changed' | 'missing' | 'unsafe'
+  status: 'ok' | 'changed' | 'missing' | 'unsafe' | 'metadata'
   remote?: RemoteCalendarEvent
 }
 
@@ -122,7 +122,7 @@ export function auditRemoteEvent(sync: CalendarMonthSync, event: SyncedCalendarE
   const managed = Object.entries(expected).every(([key, value]) => actual[key] === value)
   if (!managed) return { key: event.draft.key, status: 'unsafe', remote }
   if (sync.accountProfileId && actual.dutyAccount && actual.dutyAccount !== sync.accountProfileId) return { key: event.draft.key, status: 'unsafe', remote }
-  if (sync.accountProfileId && !actual.dutyAccount) return { key: event.draft.key, status: 'changed', remote }
+  if (sync.accountProfileId && !actual.dutyAccount) return { key: event.draft.key, status: 'metadata', remote }
   if (event.etag && remote.etag && event.etag !== remote.etag) return { key: event.draft.key, status: 'changed', remote }
   return { key: event.draft.key, status: 'ok', remote }
 }
@@ -159,7 +159,7 @@ export async function applyCalendarSync(options: ApplySyncOptions): Promise<Cale
       remote = await gateway.insert(await eventId(`${draft.key}|missing:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId))
     } else if (audit?.status === 'unsafe') {
       remote = await gateway.insert(await eventId(`${draft.key}|unsafe:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId))
-    } else if (changedKeys.has(draft.key) || audit?.status === 'changed') {
+    } else if (changedKeys.has(draft.key) || audit?.status === 'changed' || audit?.status === 'metadata') {
       remote = await gateway.patch(old.eventId, draft, privateProperties(month, deltaNumber, draft.key, accountProfileId), audit?.remote?.etag)
     } else {
       next[draft.key] = old
@@ -169,7 +169,7 @@ export async function applyCalendarSync(options: ApplySyncOptions): Promise<Cale
   }
   for (const old of plan.removed) {
     const audit = auditByKey.get(old.draft.key)
-    if (audit?.status === 'ok' || audit?.status === 'changed') await gateway.remove(old.eventId, audit.remote?.etag)
+    if (audit?.status === 'ok' || audit?.status === 'changed' || audit?.status === 'metadata') await gateway.remove(old.eventId, audit.remote?.etag)
   }
   return { id: calendarSyncId(month, deltaNumber, accountProfileId), month, deltaNumber, accountProfileId, syncedAt: options.now || Date.now(), events: next }
 }
