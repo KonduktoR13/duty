@@ -1,15 +1,16 @@
 import type { CalendarEventDraft } from './types'
-import type { CalendarGateway, RemoteCalendarEvent } from './calendar-sync'
+import { CALENDAR_MARKER, type CalendarGateway, type RemoteCalendarEvent } from './calendar-sync'
 
 export const GOOGLE_CLIENT_ID = '985972419123-valpboh05jcstqn7h68qj2d0kql0lfes.apps.googleusercontent.com'
 export const GOOGLE_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned'
 
 type TokenResponse = { access_token?: string; expires_in?: number; error?: string; error_description?: string }
 type TokenClient = { requestAccessToken(options?: { prompt?: string }): void }
+export type GoogleTokenPrompt = '' | 'select_account'
 
 declare global {
   interface Window {
-    google?: { accounts: { oauth2: { initTokenClient(config: { client_id: string; scope: string; include_granted_scopes: boolean; callback(response: TokenResponse): void; error_callback?(error: unknown): void }): TokenClient; revoke(token: string, done: () => void): void } } }
+    google?: { accounts: { oauth2: { initTokenClient(config: { client_id: string; scope: string; prompt?: GoogleTokenPrompt; include_granted_scopes: boolean; callback(response: TokenResponse): void; error_callback?(error: unknown): void }): TokenClient; revoke(token: string, done: () => void): void } } }
   }
 }
 
@@ -40,13 +41,15 @@ export function hasLiveGoogleToken() {
   return Boolean(access && access.expiresAt > Date.now())
 }
 
-export async function requestGoogleToken(forceConsent = false): Promise<string> {
+export async function requestGoogleToken(prompt: GoogleTokenPrompt = ''): Promise<string> {
+  if (prompt === 'select_account') access = undefined
   if (access && access.expiresAt > Date.now()) return access.token
   await prepareGoogleIdentityServices()
   return new Promise<string>((resolve, reject) => {
     const client = window.google!.accounts.oauth2.initTokenClient({
       client_id: GOOGLE_CLIENT_ID,
       scope: GOOGLE_SCOPE,
+      prompt,
       include_granted_scopes: true,
       callback: response => {
         if (!response.access_token || response.error) {
@@ -58,8 +61,12 @@ export async function requestGoogleToken(forceConsent = false): Promise<string> 
       },
       error_callback: () => reject(new GoogleAuthError('Авторизация Google была закрыта или заблокирована')),
     })
-    client.requestAccessToken({ prompt: forceConsent ? 'consent' : '' })
+    client.requestAccessToken({ prompt })
   })
+}
+
+export function clearGoogleAccessToken() {
+  access = undefined
 }
 
 export async function revokeGoogleAccess() {
@@ -70,7 +77,7 @@ export async function revokeGoogleAccess() {
 }
 
 async function api(path: string, init: RequestInit = {}, allowMissing = false) {
-  const token = await requestGoogleToken()
+  const token = await requestGoogleToken('')
   let response: Response
   try {
     response = await fetch(`https://www.googleapis.com/calendar/v3${path}`, {
@@ -90,6 +97,26 @@ async function api(path: string, init: RequestInit = {}, allowMissing = false) {
     throw new GoogleApiError(body.error?.message || `Google Calendar API: ${response.status}`, response.status)
   }
   return response.status === 204 ? null : response.json()
+}
+
+export type DutyAccountDiscovery = { profileIds: string[]; eventIds: string[] }
+
+export async function discoverDutyAccounts(): Promise<DutyAccountDiscovery> {
+  const profileIds = new Set<string>()
+  const eventIds: string[] = []
+  let pageToken = ''
+  do {
+    const query = new URLSearchParams({ privateExtendedProperty: `dutyPwa=${CALENDAR_MARKER}`, maxResults: '2500', showDeleted: 'false' })
+    if (pageToken) query.set('pageToken', pageToken)
+    const result = await api(`/calendars/primary/events?${query}`) as { items?: RemoteCalendarEvent[]; nextPageToken?: string }
+    for (const event of result.items || []) {
+      if (event.id) eventIds.push(event.id)
+      const profileId = event.extendedProperties?.private?.dutyAccount
+      if (profileId) profileIds.add(profileId)
+    }
+    pageToken = result.nextPageToken || ''
+  } while (pageToken)
+  return { profileIds: [...profileIds], eventIds }
 }
 
 export function googleEventPayload(eventId: string | undefined, draft: CalendarEventDraft, properties: Record<string, string>) {

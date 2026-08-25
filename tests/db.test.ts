@@ -1,6 +1,7 @@
 import 'fake-indexeddb/auto'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { storage } from '../src/db'
+import { calendarSyncId } from '../src/calendar-sync'
 import type { CalendarMonthSync, MonthRecord } from '../src/types'
 
 beforeEach(async () => storage.clear())
@@ -19,5 +20,14 @@ describe('local persistence', () => {
     await storage.remove(month.id)
     expect(await storage.months()).toEqual([])
     expect(await storage.sync(sync.id)).toEqual(sync)
+  })
+
+  it('persists the same month separately for two Google account profiles', async () => {
+    const base = { month: '2026-08', deltaNumber: 'D12', syncedAt: 2, events: {} }
+    const first: CalendarMonthSync = { ...base, id: calendarSyncId(base.month, base.deltaNumber, 'account-a'), accountProfileId: 'account-a' }
+    const second: CalendarMonthSync = { ...base, id: calendarSyncId(base.month, base.deltaNumber, 'account-b'), accountProfileId: 'account-b' }
+    await storage.putSync(first)
+    await storage.putSync(second)
+    expect(await storage.syncs()).toEqual(expect.arrayContaining([first, second]))
   })
 })

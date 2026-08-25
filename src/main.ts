@@ -2,8 +2,9 @@ import { registerSW } from 'virtual:pwa-register'
 import { storage } from './db'
 import { parsePdf } from './parser'
 import { allMarksForDelta, candidateForMonth, candidatesForMonth, foreignEntriesByDate, isWorkMark, knownDeltaNumbers, migrateMark, type ForeignDayEntry, type WorkMark } from './roster'
-import { applyCalendarSync, auditCalendarSync, buildCalendarDrafts, planCalendarSync, syncSummary, type RemoteAudit } from './calendar-sync'
-import { deterministicGoogleEventId, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess } from './google-calendar'
+import { applyCalendarSync, auditCalendarSync, buildCalendarDrafts, calendarSyncId, planCalendarSync, syncForAccount, syncSummary, type RemoteAudit } from './calendar-sync'
+import { clearGoogleAccessToken, deterministicGoogleEventId, discoverDutyAccounts, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess } from './google-calendar'
+import { createGoogleAccountProfileId, resolveGoogleAccountProfile } from './google-account'
 import { humanMonth, timeLabel } from './schedule'
 import type { CalendarMonthSync, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
 import './style.css'
@@ -70,6 +71,24 @@ async function refresh() {
     storage.syncs(),
     storage.setting<GoogleIntegrationSettings>('googleIntegration').then(value => value || { enabled: false }),
   ])
+  if (!googleSettings.accountProfileId && (googleSettings.enabled || calendarSyncs.length)) {
+    const accountProfileId = createGoogleAccountProfileId()
+    googleSettings = {
+      ...googleSettings,
+      accountProfileId,
+      lastSyncByAccount: googleSettings.lastSyncAt ? { [accountProfileId]: googleSettings.lastSyncAt } : googleSettings.lastSyncByAccount,
+    }
+    await storage.set('googleIntegration', googleSettings)
+    const migrated: CalendarMonthSync[] = []
+    for (const sync of calendarSyncs) {
+      if (sync.accountProfileId) { migrated.push(sync); continue }
+      const next = { ...sync, id: calendarSyncId(sync.month, sync.deltaNumber, accountProfileId), accountProfileId }
+      await storage.putSync(next)
+      if (next.id !== sync.id) await storage.removeSync(sync.id)
+      migrated.push(next)
+    }
+    calendarSyncs = migrated
+  }
   currentDelta = await storage.setting<string>('deltaNumber') || currentDelta
   let upgraded = false
   legacyNeedsReimport = []
@@ -275,7 +294,38 @@ function monthView(month: MonthRecord) {
 }
 
 function syncFor(month: string, deltaNumber = currentDelta) {
-  return calendarSyncs.find(sync => sync.id === `${month}|${deltaNumber}`)
+  return syncForAccount(calendarSyncs, month, deltaNumber, googleSettings.accountProfileId)
+}
+
+function currentAccountSyncs() {
+  return calendarSyncs.filter(sync => sync.accountProfileId === googleSettings.accountProfileId)
+}
+
+async function activateGoogleAccount(explicitSwitch: boolean) {
+  const discovery = await discoverDutyAccounts()
+  const previous = googleSettings.accountProfileId
+  const accountProfileId = resolveGoogleAccountProfile(previous, explicitSwitch, discovery, calendarSyncs) || createGoogleAccountProfileId()
+  googleSettings = {
+    ...googleSettings,
+    enabled: true,
+    connectedAt: googleSettings.connectedAt || Date.now(),
+    accountProfileId,
+  }
+  await storage.set('googleIntegration', googleSettings)
+  return previous !== accountProfileId
+}
+
+async function rememberGoogleSync(timestamp: number) {
+  const accountProfileId = googleSettings.accountProfileId
+  googleSettings = {
+    ...googleSettings,
+    enabled: true,
+    lastSyncAt: timestamp,
+    lastSyncByAccount: accountProfileId
+      ? { ...(googleSettings.lastSyncByAccount || {}), [accountProfileId]: timestamp }
+      : googleSettings.lastSyncByAccount,
+  }
+  await storage.set('googleIntegration', googleSettings)
 }
 
 function desiredFor(month: string, deltaNumber = currentDelta) {
@@ -572,7 +622,7 @@ async function chooseDelta(parsed: ParsedSchedule) {
 async function savePick(candidate: Candidate, deltaChangeConfirmed = false) {
   if (!pending) return
   if (!deltaChangeConfirmed && currentDelta && candidate.number !== currentDelta) {
-    const oldSyncs = calendarSyncs.filter(sync => sync.deltaNumber === currentDelta && Object.keys(sync.events).length)
+    const oldSyncs = currentAccountSyncs().filter(sync => sync.deltaNumber === currentDelta && Object.keys(sync.events).length)
     if (oldSyncs.length) {
       const oldDelta = currentDelta
       const count = oldSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
@@ -627,7 +677,7 @@ async function rememberSyncError(month: string, error: unknown, deltaNumber = cu
   const previous = syncFor(month, deltaNumber)
   const record: CalendarMonthSync = previous
     ? { ...previous, lastError: syncErrorKind(error) }
-    : { id: `${month}|${deltaNumber}`, month, deltaNumber, events: {}, lastError: syncErrorKind(error) }
+    : { id: calendarSyncId(month, deltaNumber, googleSettings.accountProfileId), month, deltaNumber, accountProfileId: googleSettings.accountProfileId, events: {}, lastError: syncErrorKind(error) }
   await storage.putSync(record)
   calendarSyncs = [...calendarSyncs.filter(item => item.id !== record.id), record]
 }
@@ -647,6 +697,7 @@ async function handleGoogleError(month: string, error: unknown, deltaNumber = cu
 }
 
 async function withGoogleAuthorization(month: string, action: () => Promise<void>, errorDelta = currentDelta) {
+  const expectedAccountProfileId = googleSettings.accountProfileId
   if (!navigator.onLine) {
     await handleGoogleError(month, new TypeError('offline'), errorDelta)
     return
@@ -664,9 +715,9 @@ async function withGoogleAuthorization(month: string, action: () => Promise<void
       const button = event.currentTarget as HTMLButtonElement
       button.disabled = true
       try {
-        await requestGoogleToken(!googleSettings.enabled)
-        googleSettings = { ...googleSettings, enabled: true, connectedAt: googleSettings.connectedAt || Date.now() }
-        await storage.set('googleIntegration', googleSettings)
+        await requestGoogleToken('')
+        const changedAccount = await activateGoogleAccount(false)
+        if (expectedAccountProfileId && changedAccount) throw new GoogleAuthError('Google-аккаунт изменился. Повторите операцию для пересчитанного состояния.')
         await action()
       } catch (error) {
         await handleGoogleError(month, error, errorDelta)
@@ -732,10 +783,9 @@ async function previewMonthSync(month: string, removeAll: boolean, after?: () =>
       }
       const record: CalendarMonthSync = previous
         ? { ...previous, syncedAt: Date.now(), lastError: undefined }
-        : { id: `${month}|${currentDelta}`, month, deltaNumber: currentDelta, syncedAt: Date.now(), events: {} }
+        : { id: calendarSyncId(month, currentDelta, googleSettings.accountProfileId), month, deltaNumber: currentDelta, accountProfileId: googleSettings.accountProfileId, syncedAt: Date.now(), events: {} }
       await storage.putSync(record)
-      googleSettings = { ...googleSettings, enabled: true, lastSyncAt: record.syncedAt }
-      await storage.set('googleIntegration', googleSettings)
+      await rememberGoogleSync(record.syncedAt!)
       await refresh()
       open('<h2>Всё актуально</h2><p>Изменений для ' + humanMonth(month) + ' и ' + esc(currentDelta) + ' нет.</p><button class="primary" id="close">Готово</button>')
       document.querySelector('#close')?.addEventListener('click', close)
@@ -755,7 +805,10 @@ async function previewMonthSync(month: string, removeAll: boolean, after?: () =>
       const button = event.currentTarget as HTMLButtonElement
       button.disabled = true
       try {
-        if (!hasLiveGoogleToken()) await requestGoogleToken(false)
+        if (!hasLiveGoogleToken()) {
+          await requestGoogleToken('')
+          if (await activateGoogleAccount(false)) throw new GoogleAuthError('Google-аккаунт изменился. Откройте синхронизацию ещё раз для пересчитанного состояния.')
+        }
         const install = await installationId()
         open('<div class="busy"><div class="spinner"></div><h2>Обновляем Google Calendar</h2><p>Не закрывайте это окно.</p></div>')
         const result = await applyCalendarSync({
@@ -765,12 +818,12 @@ async function previewMonthSync(month: string, removeAll: boolean, after?: () =>
           previous,
           audits,
           gateway: googleCalendarGateway,
-          eventId: (key, recovery) => deterministicGoogleEventId(install, `${month}|${currentDelta}`, key, recovery),
+          eventId: (key, recovery) => deterministicGoogleEventId(install, calendarSyncId(month, currentDelta, googleSettings.accountProfileId), key, recovery),
+          accountProfileId: googleSettings.accountProfileId,
         })
         if (removeAll) await storage.removeSync(result.id)
         else await storage.putSync(result)
-        googleSettings = { ...googleSettings, enabled: true, lastSyncAt: result.syncedAt }
-        await storage.set('googleIntegration', googleSettings)
+        await rememberGoogleSync(result.syncedAt!)
         if (after) await after()
         await refresh()
         open('<h2>' + (removeAll ? 'События удалены' : 'Синхронизация завершена') + '</h2><p>Изменения применены только к событиям PWA для ' + humanMonth(month) + ' и ' + esc(currentDelta) + '.</p><button class="primary" id="close">Готово</button>')
@@ -807,15 +860,17 @@ function showImportedSyncChanges(month: string) {
 }
 
 function showSettings() {
-  const tracked = calendarSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  const tracked = currentAccountSyncs().reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  const trackedAcrossAccounts = calendarSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
   const googleLabel = googleSettings.enabled ? 'Подключено' : 'Не подключено'
-  const lastSync = googleSettings.lastSyncAt ? new Date(googleSettings.lastSyncAt).toLocaleString('ru-RU') : 'синхронизаций ещё не было'
+  const accountLastSync = googleSettings.accountProfileId ? googleSettings.lastSyncByAccount?.[googleSettings.accountProfileId] : undefined
+  const lastSync = accountLastSync ? new Date(accountLastSync).toLocaleString('ru-RU') : 'синхронизаций ещё не было'
   open('<h2>Настройки</h2><p>Данные графиков хранятся в IndexedDB только на этом устройстве.</p><button class="calendar-button" id="delta-settings">Текущий D-номер <span>' + esc(currentDelta || 'не выбран') + '</span></button><button class="calendar-button" id="google-settings">Google Calendar <span>' + googleLabel + '</span></button><small class="settings-note">Последняя синхронизация: ' + esc(lastSync) + (tracked ? ' · управляемых событий: ' + tracked : '') + '</small><button class="danger" id="wipe">Удалить все локальные данные</button><button class="primary" id="close">Закрыть</button>')
   document.querySelector('#close')?.addEventListener('click', close)
   document.querySelector('#delta-settings')?.addEventListener('click', showDeltaSettings)
   document.querySelector('#google-settings')?.addEventListener('click', showGoogleSettings)
   document.querySelector('#wipe')?.addEventListener('click', async () => {
-    const warning = tracked ? ' События Google Calendar при этом останутся; сначала удалите их через настройки Google Calendar, если они больше не нужны.' : ''
+    const warning = trackedAcrossAccounts ? ' События Google Calendar при этом останутся; сначала удалите их через настройки соответствующего Google-аккаунта, если они больше не нужны.' : ''
     if (confirm('Удалить все локальные PDF, графики и настройки с этого устройства?' + warning)) {
       await storage.clear()
       currentDelta = ''
@@ -836,7 +891,7 @@ function showDeltaSettings() {
 async function proposeDeltaSwitch(nextDelta: string) {
   if (nextDelta === currentDelta) { showSettings(); return }
   const oldDelta = currentDelta
-  const oldSyncs = calendarSyncs.filter(sync => sync.deltaNumber === oldDelta && Object.keys(sync.events).length)
+  const oldSyncs = currentAccountSyncs().filter(sync => sync.deltaNumber === oldDelta && Object.keys(sync.events).length)
   if (!oldSyncs.length) {
     await applyDeltaSwitch(nextDelta)
     return
@@ -857,14 +912,15 @@ async function applyDeltaSwitch(nextDelta: string) {
 }
 
 function showGoogleSettings() {
-  const records = calendarSyncs.filter(sync => Object.keys(sync.events).length)
+  const records = currentAccountSyncs().filter(sync => Object.keys(sync.events).length)
   const eventCount = records.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
   const status = googleSettings.enabled
-    ? 'Интеграция включена. При новом сеансе Google может снова запросить кратковременную авторизацию.'
+    ? 'Google Calendar подключён. Новый кратковременный токен запрашивается без принудительного выбора аккаунта.'
     : 'Интеграция выключена. Локальные функции работают без Google.'
-  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + (googleSettings.enabled ? '<button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
+  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + (googleSettings.enabled ? '<button class="calendar-button" id="switch-google">Сменить Google-аккаунт <span>выбрать явно</span></button><button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
   document.querySelector('#back')?.addEventListener('click', showSettings)
   document.querySelector('#connect-google')?.addEventListener('click', () => void connectGoogleFromSettings())
+  document.querySelector('#switch-google')?.addEventListener('click', () => void switchGoogleAccount())
   document.querySelector('#disconnect-google')?.addEventListener('click', async () => {
     await revokeGoogleAccess()
     googleSettings = { ...googleSettings, enabled: false }
@@ -872,6 +928,38 @@ function showGoogleSettings() {
     showGoogleSettings()
   })
   document.querySelector('#remove-all-google')?.addEventListener('click', () => void removeSyncRecords(records, async () => {}))
+}
+
+async function switchGoogleAccount() {
+  if (!navigator.onLine) {
+    open('<h2>Нет сети</h2><p>Смена Google-аккаунта требует интернет.</p><button class="primary" id="back">Понятно</button>')
+    document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+    return
+  }
+  try {
+    open('<div class="busy"><div class="spinner"></div><h2>Готовим выбор аккаунта</h2></div>')
+    await prepareGoogleIdentityServices()
+    open('<h2>Сменить Google-аккаунт?</h2><p>События и sync metadata прежнего аккаунта сохранятся отдельно и не будут смешаны с выбранным аккаунтом.</p><button class="primary" id="select-google-account">Выбрать Google-аккаунт</button><button id="back">Отмена</button>')
+    document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+    document.querySelector<HTMLButtonElement>('#select-google-account')?.addEventListener('click', async event => {
+      const button = event.currentTarget as HTMLButtonElement
+      button.disabled = true
+      try {
+        clearGoogleAccessToken()
+        await requestGoogleToken('select_account')
+        await activateGoogleAccount(true)
+        await refresh()
+        open('<h2>Google-аккаунт выбран</h2><p>Состояние синхронизации пересчитано для выбранного основного календаря. Данные других аккаунтов остались изолированы.</p><button class="primary" id="back">Готово</button>')
+        document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+      } catch (error) {
+        open('<h2>Не удалось сменить аккаунт</h2><p>' + esc(googleErrorText(error)) + '</p><button class="primary" id="back">Понятно</button>')
+        document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+      }
+    })
+  } catch (error) {
+    open('<h2>Не удалось сменить аккаунт</h2><p>' + esc(googleErrorText(error)) + '</p><button class="primary" id="back">Понятно</button>')
+    document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+  }
 }
 
 async function connectGoogleFromSettings() {
@@ -887,9 +975,8 @@ async function connectGoogleFromSettings() {
     document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
     document.querySelector('#authorize-google')?.addEventListener('click', async () => {
       try {
-        await requestGoogleToken(true)
-        googleSettings = { ...googleSettings, enabled: true, connectedAt: googleSettings.connectedAt || Date.now() }
-        await storage.set('googleIntegration', googleSettings)
+        await requestGoogleToken('')
+        await activateGoogleAccount(false)
         showGoogleSettings()
       } catch (error) {
         open('<h2>Не удалось подключить</h2><p>' + esc(googleErrorText(error)) + '</p><button class="primary" id="back">Понятно</button>')
@@ -903,7 +990,7 @@ async function connectGoogleFromSettings() {
 }
 
 async function deleteLocalMonth(id: string) {
-  const syncRecords = calendarSyncs.filter(sync => sync.month === id && Object.keys(sync.events).length)
+  const syncRecords = currentAccountSyncs().filter(sync => sync.month === id && Object.keys(sync.events).length)
   const removeLocal = async () => { await storage.remove(id) }
   if (!syncRecords.length) {
     if (confirm('Удалить ' + humanMonth(id) + ' из приложения? Исходный PDF в папке устройства не удаляется.')) {
@@ -934,16 +1021,18 @@ async function removeSyncRecords(records: CalendarMonthSync[], after: () => Prom
     document.querySelector('#cancel')?.addEventListener('click', close)
     document.querySelector('#confirm-remove-google')?.addEventListener('click', async () => {
       try {
-        if (!hasLiveGoogleToken()) await requestGoogleToken(false)
+        if (!hasLiveGoogleToken()) {
+          await requestGoogleToken('')
+          if (await activateGoogleAccount(false)) throw new GoogleAuthError('Google-аккаунт изменился. Повторите операцию для выбранного аккаунта.')
+        }
         open('<div class="busy"><div class="spinner"></div><h2>Удаляем события PWA</h2></div>')
         const install = await installationId()
         for (const item of audited) {
-          await applyCalendarSync({ month: item.sync.month, deltaNumber: item.sync.deltaNumber, desired: [], previous: item.sync, audits: item.audits, gateway: googleCalendarGateway, eventId: (key, recovery) => deterministicGoogleEventId(install, item.sync.id, key, recovery) })
+          await applyCalendarSync({ month: item.sync.month, deltaNumber: item.sync.deltaNumber, desired: [], previous: item.sync, audits: item.audits, gateway: googleCalendarGateway, eventId: (key, recovery) => deterministicGoogleEventId(install, item.sync.id, key, recovery), accountProfileId: item.sync.accountProfileId })
           await storage.removeSync(item.sync.id)
         }
         await after()
-        googleSettings = { ...googleSettings, lastSyncAt: Date.now() }
-        await storage.set('googleIntegration', googleSettings)
+        await rememberGoogleSync(Date.now())
         await refresh()
         open('<h2>Готово</h2><p>Удалены только события, однозначно отмеченные как созданные этой PWA.</p><button class="primary" id="close">Закрыть</button>')
         document.querySelector('#close')?.addEventListener('click', close)

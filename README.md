@@ -33,9 +33,9 @@ Vite PWA генерирует manifest и Service Worker с precache прило�
 
 ## Google Calendar
 
-Интеграция использует Google Identity Services token model без backend и без client secret. Запрашивается только scope `https://www.googleapis.com/auth/calendar.events.owned`; события создаются в `primary`. PDF, остальные строки графика и access token в Google не передаются и долговременно не сохраняются.
+Интеграция использует Google Identity Services token model без backend и без client secret. Запрашивается только scope `https://www.googleapis.com/auth/calendar.events.owned`; события создаются в `primary`. Обычное получение нового токена всегда использует `prompt: ''`, а `prompt: 'select_account'` — только отдельное действие «Сменить Google-аккаунт». PDF, остальные строки графика и access token в Google не передаются и долговременно не сохраняются.
 
-Каждое событие получает `extendedProperties.private` с marker, месяцем, D-номером и стабильным sync key. Перед patch/delete PWA заново читает событие и проверяет все marker-поля; событие без точного marker никогда не меняется. Локальный `syncs` store сохраняет event ID, последний подтверждённый draft и etag. Поэтому повторный импорт показывает add/change/remove diff, повторная синхронизация не создаёт дублей, а ручные правки или удаления в Google обнаруживаются до восстановления по PDF.
+Каждое событие получает `extendedProperties.private` с marker, анонимным локальным Google-profile ID, месяцем, D-номером и стабильным sync key. Profile ID не является email или Google user ID: он нужен только для разделения локальных sync records нескольких аккаунтов и распознаётся по событиям самой PWA через `events.list`. Перед patch/delete PWA заново читает событие и проверяет все marker-поля; событие без точного marker никогда не меняется. Локальный `syncs` store сохраняет event ID, последний подтверждённый draft и etag отдельно для каждого выбранного аккаунта. Поэтому повторный импорт показывает add/change/remove diff, повторная синхронизация не создаёт дублей, а ручные правки или удаления в Google обнаруживаются до восстановления по PDF.
 
 Для опубликованной Pages-версии в OAuth Web Client нужно добавить Authorized JavaScript Origin ровно `https://konduktor13.github.io` — без `/duty/`, завершающего `/`, query или fragment. Redirect URI для GIS token popup flow не требуется.
 
@@ -48,4 +48,4 @@ Vite PWA генерирует manifest и Service Worker с precache прило�
 
 ## Тесты и ограничения
 
-`npm test` проверяет PDF parsing, многослойные V-коды, повёрнутую таблицу, границы месяцев, переключение D-номера, чужие смены, IndexedDB migration boundaries и Google sync add/change/remove/idempotency/ownership. Реальные персональные PDF читаются только локальными regression-тестами вне публичного репозитория. Safari требует проверки на физическом Apple-устройстве.
+`npm test` проверяет PDF parsing, многослойные V-коды, повёрнутую таблицу, границы месяцев, переключение D-номера, чужие смены, IndexedDB migration boundaries, Google sync add/change/remove/idempotency/ownership, OAuth prompt и изоляцию нескольких Google-аккаунтов. Реальные персональные PDF читаются только локальными regression-тестами вне публичного репозитория. Safari требует проверки на физическом Apple-устройстве.

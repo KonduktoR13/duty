@@ -103,8 +103,16 @@ export function planCalendarSync(desired: CalendarEventDraft[], previous?: Calen
   return { added, changed, removed, unchanged }
 }
 
-export function privateProperties(month: string, deltaNumber: string, key: string) {
-  return { dutyPwa: CALENDAR_MARKER, month, deltaNumber, syncKey: key }
+export function calendarSyncId(month: string, deltaNumber: string, accountProfileId?: string) {
+  return accountProfileId ? `${accountProfileId}|${month}|${deltaNumber}` : `${month}|${deltaNumber}`
+}
+
+export function syncForAccount(syncs: CalendarMonthSync[], month: string, deltaNumber: string, accountProfileId?: string) {
+  return syncs.find(sync => sync.month === month && sync.deltaNumber === deltaNumber && sync.accountProfileId === accountProfileId)
+}
+
+export function privateProperties(month: string, deltaNumber: string, key: string, accountProfileId?: string) {
+  return { dutyPwa: CALENDAR_MARKER, month, deltaNumber, syncKey: key, ...(accountProfileId ? { dutyAccount: accountProfileId } : {}) }
 }
 
 export function auditRemoteEvent(sync: CalendarMonthSync, event: SyncedCalendarEvent, remote: RemoteCalendarEvent | null): RemoteAudit {
@@ -113,6 +121,8 @@ export function auditRemoteEvent(sync: CalendarMonthSync, event: SyncedCalendarE
   const actual = remote.extendedProperties?.private || {}
   const managed = Object.entries(expected).every(([key, value]) => actual[key] === value)
   if (!managed) return { key: event.draft.key, status: 'unsafe', remote }
+  if (sync.accountProfileId && actual.dutyAccount && actual.dutyAccount !== sync.accountProfileId) return { key: event.draft.key, status: 'unsafe', remote }
+  if (sync.accountProfileId && !actual.dutyAccount) return { key: event.draft.key, status: 'changed', remote }
   if (event.etag && remote.etag && event.etag !== remote.etag) return { key: event.draft.key, status: 'changed', remote }
   return { key: event.draft.key, status: 'ok', remote }
 }
@@ -129,11 +139,12 @@ export type ApplySyncOptions = {
   audits: RemoteAudit[]
   gateway: CalendarGateway
   eventId: (key: string, recovery?: boolean) => Promise<string>
+  accountProfileId?: string
   now?: number
 }
 
 export async function applyCalendarSync(options: ApplySyncOptions): Promise<CalendarMonthSync> {
-  const { month, deltaNumber, desired, previous, audits, gateway, eventId } = options
+  const { month, deltaNumber, desired, previous, audits, gateway, eventId, accountProfileId } = options
   const plan = planCalendarSync(desired, previous)
   const auditByKey = new Map(audits.map(audit => [audit.key, audit]))
   const changedKeys = new Set(plan.changed.map(item => item.after.key))
@@ -143,13 +154,13 @@ export async function applyCalendarSync(options: ApplySyncOptions): Promise<Cale
     const audit = old ? auditByKey.get(draft.key) : undefined
     let remote: RemoteCalendarEvent
     if (!old) {
-      remote = await gateway.insert(await eventId(draft.key), draft, privateProperties(month, deltaNumber, draft.key))
+      remote = await gateway.insert(await eventId(draft.key), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId))
     } else if (audit?.status === 'missing') {
-      remote = await gateway.insert(await eventId(`${draft.key}|missing:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key))
+      remote = await gateway.insert(await eventId(`${draft.key}|missing:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId))
     } else if (audit?.status === 'unsafe') {
-      remote = await gateway.insert(await eventId(`${draft.key}|unsafe:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key))
+      remote = await gateway.insert(await eventId(`${draft.key}|unsafe:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId))
     } else if (changedKeys.has(draft.key) || audit?.status === 'changed') {
-      remote = await gateway.patch(old.eventId, draft, privateProperties(month, deltaNumber, draft.key), audit?.remote?.etag)
+      remote = await gateway.patch(old.eventId, draft, privateProperties(month, deltaNumber, draft.key, accountProfileId), audit?.remote?.etag)
     } else {
       next[draft.key] = old
       continue
@@ -160,7 +171,7 @@ export async function applyCalendarSync(options: ApplySyncOptions): Promise<Cale
     const audit = auditByKey.get(old.draft.key)
     if (audit?.status === 'ok' || audit?.status === 'changed') await gateway.remove(old.eventId, audit.remote?.etag)
   }
-  return { id: `${month}|${deltaNumber}`, month, deltaNumber, syncedAt: options.now || Date.now(), events: next }
+  return { id: calendarSyncId(month, deltaNumber, accountProfileId), month, deltaNumber, accountProfileId, syncedAt: options.now || Date.now(), events: next }
 }
 
 export function syncSummary(plan: SyncPlan) {

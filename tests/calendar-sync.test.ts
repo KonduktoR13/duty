@@ -73,6 +73,15 @@ describe('Google Calendar sync model', () => {
     expect(auditRemoteEvent(previous, event, { ...managed, extendedProperties: { private: {} } }).status).toBe('unsafe')
   })
 
+  it('migrates legacy ownership metadata but rejects another Google account profile', () => {
+    const event = synced('event1')
+    const previous = { ...sync({ [event.draft.key]: event }), accountProfileId: 'account-a' }
+    const legacy = { id: 'event1', etag: 'old', extendedProperties: { private: privateProperties(month, delta, event.draft.key) } }
+    expect(auditRemoteEvent(previous, event, legacy).status).toBe('changed')
+    const otherAccount = { ...legacy, extendedProperties: { private: privateProperties(month, delta, event.draft.key, 'account-b') } }
+    expect(auditRemoteEvent(previous, event, otherAccount).status).toBe('unsafe')
+  })
+
   it('never patches or deletes an event without the PWA ownership marker', async () => {
     const draft = buildCalendarDrafts(month, delta, [{ date: '2026-08-03', kind: 'hours', raw: '24', hours: 24 }])[0]
     const old = synced('foreign', draft)

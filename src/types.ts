@@ -30,6 +30,7 @@ export type CalendarMonthSync = {
   id: string
   month: string
   deltaNumber: string
+  accountProfileId?: string
   syncedAt?: number
   events: Record<string, SyncedCalendarEvent>
   lastError?: CalendarSyncError
@@ -37,8 +38,10 @@ export type CalendarMonthSync = {
 
 export type GoogleIntegrationSettings = {
   enabled: boolean
+  accountProfileId?: string
   connectedAt?: number
   lastSyncAt?: number
+  lastSyncByAccount?: Record<string, number>
 }
 
 export type MonthRecord = {
