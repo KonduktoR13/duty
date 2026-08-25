@@ -1,12 +1,14 @@
 import { registerSW } from 'virtual:pwa-register'
 import { storage } from './db'
 import { parsePdf } from './parser'
-import { humanMonth, normalizeCrossMonth, timeLabel } from './schedule'
-import type { Candidate, DayMark, LeaveCode, MonthRecord, ParsedSchedule, Shift } from './types'
+import { allMarksForDelta, candidateForMonth, candidatesForMonth, foreignEntriesByDate, isWorkMark, knownDeltaNumbers, migrateMark, type ForeignDayEntry, type WorkMark } from './roster'
+import { applyCalendarSync, auditCalendarSync, buildCalendarDrafts, planCalendarSync, syncSummary, type RemoteAudit } from './calendar-sync'
+import { deterministicGoogleEventId, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess } from './google-calendar'
+import { humanMonth, timeLabel } from './schedule'
+import type { CalendarMonthSync, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
 import './style.css'
 import './interaction.css'
 
-type WorkMark = { date: string; kind: 'hours' | 'home'; raw: string; hours: number }
 type UpcomingDay = { date: string; marks: WorkMark[] }
 type PreparedMonthTransition = {
   calendar: HTMLElement
@@ -21,6 +23,7 @@ type PreparedMonthTransition = {
 const app = document.querySelector<HTMLDivElement>('#app')!
 let months: MonthRecord[] = []
 let selected = ''
+let currentDelta = ''
 let selectedDate: string | null = null
 let section: 'calendar' | 'documents' = 'calendar'
 let pending: { file: File; parsed: ParsedSchedule } | null = null
@@ -29,11 +32,13 @@ let monthTransitioning = false
 let calendarGestureActive = false
 let ignoreDayClicksUntil = 0
 let legacyNeedsReimport: string[] = []
+let calendarSyncs: CalendarMonthSync[] = []
+let googleSettings: GoogleIntegrationSettings = { enabled: false }
+let highlightSyncOffer = false
 
 const localDateId = (value = new Date()) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-')
 const todayId = () => localDateId()
 const esc = (value: string) => value.replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]!))
-const isWorkMark = (mark: DayMark): mark is WorkMark => mark.kind === 'hours' || mark.kind === 'home'
 const displayCode = (mark: Pick<WorkMark, 'raw'> | DayMark) => mark.raw === '16+8' ? '24' : mark.raw
 const hoursText = (hours: number) => `${String(hours).replace('.', ',')} ч`
 
@@ -41,36 +46,8 @@ function blankMonth(id: string): MonthRecord {
   return { id, fileName: 'График не загружен', importedAt: 0, hash: '', shifts: [], deltaNumber: '', status: 'local' }
 }
 
-function marksForRecord(month: MonthRecord): DayMark[] {
-  if (month.marks) return month.marks.map(migrateMark)
-  const work: DayMark[] = month.shifts.map(shift => ({
-    date: shift.date,
-    kind: /^V\d/i.test(shift.code) ? 'home' : 'hours',
-    raw: shift.code,
-    hours: shift.hours,
-  }))
-  const leave: DayMark[] = (month.leaveDates || []).map(date => ({
-    date,
-    kind: 'leave',
-    raw: month.leaveCodes?.[date] || 'P',
-  }))
-  return [...work, ...leave]
-}
-
-function migrateMark(mark: DayMark): DayMark {
-  if (mark.kind !== 'other') return mark
-  const tentative = mark.raw.match(/^#(\d+)$/)
-  const hours = Number(tentative?.[1])
-  return tentative && hours > 0 && hours <= 48
-    ? { date: mark.date, kind: 'tentative', raw: mark.raw, hours }
-    : mark
-}
-
 function allMarks(): DayMark[] {
-  const raw = months.flatMap(marksForRecord)
-  const normalizedWork = normalizeCrossMonth(raw.filter(isWorkMark).map(mark => ({ date: mark.date, hours: mark.hours, code: mark.raw })))
-    .map<WorkMark>(shift => ({ date: shift.date, kind: /^V\d/i.test(shift.code) ? 'home' : 'hours', raw: shift.code, hours: shift.hours }))
-  return [...normalizedWork, ...raw.filter(mark => !isWorkMark(mark))]
+  return allMarksForDelta(months, currentDelta)
 }
 
 function groupMarks(marks: DayMark[]) {
@@ -88,35 +65,49 @@ function upcomingDay(): UpcomingDay | undefined {
 }
 
 async function refresh() {
-  months = await storage.months()
+  ;[months, calendarSyncs, googleSettings] = await Promise.all([
+    storage.months(),
+    storage.syncs(),
+    storage.setting<GoogleIntegrationSettings>('googleIntegration').then(value => value || { enabled: false }),
+  ])
+  currentDelta = await storage.setting<string>('deltaNumber') || currentDelta
   let upgraded = false
   legacyNeedsReimport = []
-  for (const month of months.filter(month => month.marks)) {
-    const marks = month.marks!.map(migrateMark)
-    if (marks.some((mark, index) => mark !== month.marks![index])) {
-      await storage.put({ ...month, marks })
-      upgraded = true
-    }
-  }
-  for (const month of months.filter(month => !month.marks)) {
-    const pdf = await storage.pdf(month.id)
-    if (!pdf) {
-      legacyNeedsReimport.push(month.id)
+  for (const month of months) {
+    if (month.candidates?.length) {
+      const candidates = month.candidates.map(candidate => ({ ...candidate, marks: candidate.marks.map(migrateMark) }))
+      const changed = month.candidates.some((candidate, candidateIndex) => candidate.marks.some((mark, markIndex) => mark !== candidates[candidateIndex].marks[markIndex]))
+      if (changed) {
+        await storage.put({ ...month, candidates })
+        upgraded = true
+      }
       continue
     }
-    try {
-      const parsed = await parsePdf(pdf as File)
-      const candidate = parsed.candidates.find(item => item.number === month.deltaNumber)
-      if (!candidate) continue
-      await storage.put({ ...month, marks: candidate.marks, shifts: candidate.shifts, leaveDates: candidate.leaveDates, leaveCodes: candidate.leaveCodes })
+    const pdf = await storage.pdf(month.id)
+    if (pdf) {
+      try {
+        const parsed = await parsePdf(pdf as File)
+        const candidate = parsed.candidates.find(item => item.number === currentDelta) || parsed.candidates.find(item => item.number === month.deltaNumber) || parsed.candidates[0]
+        await storage.put({ ...month, candidates: parsed.candidates, marks: candidate.marks, shifts: candidate.shifts, leaveDates: candidate.leaveDates, leaveCodes: candidate.leaveCodes })
+        upgraded = true
+        continue
+      } catch {
+        legacyNeedsReimport.push(month.id)
+      }
+    }
+    const fallback = candidatesForMonth(month)
+    if (fallback.length) {
+      await storage.put({ ...month, candidates: fallback })
       upgraded = true
-    } catch {
-      // Keep the already saved legacy interpretation if its original PDF is
-      // unavailable or malformed; no local data is removed during upgrade.
+    } else if (!pdf) {
       legacyNeedsReimport.push(month.id)
     }
   }
   if (upgraded) months = await storage.months()
+  if (!currentDelta) {
+    currentDelta = knownDeltaNumbers(months)[0] || ''
+    if (currentDelta) await storage.set('deltaNumber', currentDelta)
+  }
   if (!selected || !months.some(month => month.id === selected)) selected = months[0]?.id || ''
   selectedDate = null
   render()
@@ -186,6 +177,17 @@ function markDescription(mark: DayMark, compact = false) {
   return compact ? `${hoursText(mark.hours)} · код ${mark.raw}` : `${hoursText(mark.hours)} · код графика ${mark.raw}`
 }
 
+function foreignMarkDescription(mark: DayMark, marks: DayMark[], deltaNumber: string) {
+  if (!isWorkMark(mark)) return markDescription(mark)
+  const draft = buildCalendarDrafts(mark.date.slice(0, 7), deltaNumber, marks).find(item => item.raw === mark.raw && item.kind === mark.kind)
+  if (!draft) return markDescription(mark)
+  const start = draft.start.dateTime.slice(11, 16)
+  const end = draft.end.dateTime.slice(11, 16)
+  const nextDay = draft.start.dateTime.slice(0, 10) !== draft.end.dateTime.slice(0, 10)
+  const type = mark.kind === 'home' ? 'Домашнее дежурство (koduvalve)' : mark.hours === 24 ? 'Суточная смена' : 'Рабочая отметка'
+  return `${type} · код ${mark.raw} · ${start}–${end}${nextDay ? ' следующего дня' : ''}`
+}
+
 function dayTone(marks: DayMark[]) {
   const has24 = marks.some(mark => mark.kind === 'hours' && mark.hours === 24)
   const hasBoundary = marks.some(isMonthBoundaryPart)
@@ -213,17 +215,20 @@ function dayAria(dateKey: string, marks: DayMark[]) {
   return `${date(dateKey)}: ${marks.map(mark => markDescription(mark)).join('; ')}`
 }
 
-function calendarPage(month: MonthRecord, marksByDate: Map<string, DayMark[]>) {
+function calendarPage(month: MonthRecord, marksByDate: Map<string, DayMark[]>, suppliedForeign?: Map<string, ForeignDayEntry[]>) {
   const currentDay = todayId()
   const value = new Date(month.id + '-01T12:00:00')
   const offset = (value.getDay() + 6) % 7
   const totalDays = new Date(value.getFullYear(), value.getMonth() + 1, 0).getDate()
+  const foreignByDate = suppliedForeign || foreignEntriesByDate(months, month.id, currentDelta)
   const cells: string[] = Array.from({ length: offset }, () => '<i class="day-blank" aria-hidden="true"></i>')
   for (let day = 1; day <= totalDays; day++) {
     const dateKey = month.id + '-' + String(day).padStart(2, '0')
     const marks = marksByDate.get(dateKey) || []
+    const hasColleagues = !marks.length && (foreignByDate.get(dateKey)?.length || 0) > 0
     if (!marks.length) {
-      cells.push('<span class="day day-empty ' + (dateKey === currentDay ? 'today' : '') + '"><b>' + day + '</b></span>')
+      const label = hasColleagues ? `${date(dateKey)}: есть смены других D-номеров` : `${date(dateKey)}: нет смен`
+      cells.push('<button class="day day-empty ' + (hasColleagues ? 'has-colleagues ' : '') + (selectedDate === dateKey ? 'selected ' : '') + (dateKey === currentDay ? 'today' : '') + '" data-day="' + dateKey + '" aria-label="' + esc(label) + '"><b>' + day + '</b>' + (hasColleagues ? '<i class="colleague-dot" aria-hidden="true"></i>' : '') + '</button>')
       continue
     }
     const regularCodes = marks.filter(mark => mark.kind !== 'home').map(displayCode)
@@ -239,10 +244,16 @@ function calendarPage(month: MonthRecord, marksByDate: Map<string, DayMark[]>) {
   return '<div class="calendar-page" data-month="' + month.id + '"><div class="grid">' + cells.join('') + '</div></div>'
 }
 
-function selectedDetails(marksByDate: Map<string, DayMark[]>) {
+function selectedDetails(marksByDate: Map<string, DayMark[]>, month: MonthRecord, foreignByDate: Map<string, ForeignDayEntry[]>) {
   if (!selectedDate) return ''
   const marks = marksByDate.get(selectedDate) || []
-  if (!marks.length) return ''
+  if (!marks.length) {
+    const entries = foreignByDate.get(selectedDate) || []
+    const content = entries.length
+      ? '<b class="foreign-title">' + (entries.length > 1 ? 'Другие D-номера · ' + entries.length : 'Другой D-номер · ' + esc(entries[0].deltaNumber)) + '</b><div class="foreign-entries">' + entries.map(entry => '<section class="foreign-entry"><strong>' + esc(entry.deltaNumber) + '</strong><div class="detail-lines">' + entry.marks.map(mark => '<div class="detail-line ' + mark.kind + '"><i></i><div><b>' + esc(displayCode(mark)) + '</b><span>' + esc(foreignMarkDescription(mark, entry.marks, entry.deltaNumber)) + '</span></div></div>').join('') + '</div></section>').join('') + '</div>'
+      : '<b>Нет смен</b><span class="empty-detail">В исходном графике на этот день рабочих отметок нет.</span>'
+    return '<section class="shift-details ' + (entries.length ? 'foreign-details' : 'empty-details') + '" id="shift-details" aria-label="Информация за ' + esc(date(selectedDate)) + '"><i class="detail-handle" aria-hidden="true"></i><div class="detail-icon">' + (entries.length ? 'D' : '—') + '</div><div class="detail-content"><small>' + date(selectedDate) + '</small>' + content + '</div><button class="detail-close" id="detail-close" aria-label="Закрыть информацию о дне">×</button></section>'
+  }
   const hasHome = marks.some(mark => mark.kind === 'home')
   const onlyHome = hasHome && marks.every(mark => mark.kind === 'home' || mark.kind === 'other')
   const onlyLeave = marks.every(mark => mark.kind === 'leave')
@@ -255,16 +266,52 @@ function selectedDetails(marksByDate: Map<string, DayMark[]>) {
 
 function monthView(month: MonthRecord) {
   const marksByDate = groupMarks(allMarks())
-  return '<nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav><section class="calendar" id="calendar"><div class="week">' +
+  const foreignByDate = foreignEntriesByDate(months, month.id, currentDelta)
+  return '<nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav>' + calendarSyncCard(month) + '<section class="calendar" id="calendar"><div class="week">' +
     ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => '<span>' + day + '</span>').join('') +
-    '</div><div class="calendar-viewport" id="calendar-viewport"><div class="calendar-track" id="calendar-track">' + calendarPage(month, marksByDate) +
+    '</div><div class="calendar-viewport" id="calendar-viewport"><div class="calendar-track" id="calendar-track">' + calendarPage(month, marksByDate, foreignByDate) +
     '</div></div><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></section>' +
-    selectedDetails(marksByDate)
+    selectedDetails(marksByDate, month, foreignByDate)
+}
+
+function syncFor(month: string, deltaNumber = currentDelta) {
+  return calendarSyncs.find(sync => sync.id === `${month}|${deltaNumber}`)
+}
+
+function desiredFor(month: string, deltaNumber = currentDelta) {
+  return buildCalendarDrafts(month, deltaNumber, allMarksForDelta(months, deltaNumber))
+}
+
+function calendarSyncCard(month: MonthRecord) {
+  const sync = syncFor(month.id)
+  const desired = desiredFor(month.id)
+  const plan = planCalendarSync(desired, sync)
+  const changed = plan.added.length + plan.changed.length + plan.removed.length > 0
+  let tone = 'idle'
+  let label = 'Не синхронизирован'
+  const candidateAvailable = Boolean(candidateForMonth(month, currentDelta))
+  if (!navigator.onLine) { tone = 'error'; label = 'Офлайн · синхронизация недоступна' }
+  else if (!candidateAvailable && !sync?.syncedAt) { tone = 'idle'; label = `${currentDelta} не найден в этом PDF` }
+  else if (sync?.lastError === 'auth') { tone = 'auth'; label = 'Требуется авторизация' }
+  else if (sync?.lastError === 'offline') { tone = 'error'; label = 'Ошибка · нет сети' }
+  else if (sync?.lastError === 'api') { tone = 'error'; label = 'Ошибка Google Calendar' }
+  else if (sync?.syncedAt && changed) { tone = 'changed'; label = 'Есть изменения' }
+  else if (sync?.syncedAt) { tone = 'synced'; label = 'Синхронизирован' }
+  const action = sync?.syncedAt ? (changed ? 'Посмотреть изменения' : 'Проверить') : 'Добавить смены'
+  const details = sync?.syncedAt
+    ? `D-номер ${currentDelta} · ${new Date(sync.syncedAt).toLocaleString('ru-RU')}`
+    : `${desired.length} подтверждённых событий · основной календарь`
+  const disabled = (!candidateAvailable && !sync?.syncedAt) || !navigator.onLine
+  const hasGoogleEvents = Boolean(sync && Object.keys(sync.events).length)
+  return '<aside class="sync-card ' + tone + (highlightSyncOffer ? ' suggested' : '') + '"><div class="sync-mark">G</div><div><b>Google Calendar</b><span class="sync-status"><i></i>' + label + '</span><small>' + esc(details) + '</small></div><div class="sync-actions"><button id="sync-month"' + (disabled ? ' disabled' : '') + '>' + action + '</button>' + (hasGoogleEvents ? '<button id="unsync-month" class="link-danger"' + (!navigator.onLine ? ' disabled' : '') + '>Удалить из Google</button>' : '') + '</div></aside>'
 }
 
 function documentsView() {
   const rows = months.length
-    ? months.map(month => '<article data-open-pdf="' + month.id + '" role="button" tabindex="0" aria-label="Открыть PDF ' + esc(month.fileName) + '"><div class="doc-icon">▤</div><div><b>' + humanMonth(month.id) + '</b><span>' + esc(month.fileName) + '</span><small>' + month.shifts.length + ' подтверждённых рабочих отметок · загружен ' + new Date(month.importedAt).toLocaleDateString('ru-RU') + '</small></div><button class="delete-month" data-delete-month="' + month.id + '" aria-label="Удалить ' + humanMonth(month.id) + '">⌫</button></article>').join('')
+    ? months.map(month => {
+      const candidate = candidateForMonth(month, currentDelta)
+      return '<article data-open-pdf="' + month.id + '" role="button" tabindex="0" aria-label="Открыть PDF ' + esc(month.fileName) + '"><div class="doc-icon">▤</div><div><b>' + humanMonth(month.id) + '</b><span>' + esc(month.fileName) + '</span><small>' + (candidate?.shifts.length || 0) + ' подтверждённых отметок для ' + esc(currentDelta) + ' · загружен ' + new Date(month.importedAt).toLocaleDateString('ru-RU') + '</small></div><button class="delete-month" data-delete-month="' + month.id + '" aria-label="Удалить ' + humanMonth(month.id) + '">⌫</button></article>'
+    }).join('')
     : '<p>Графики ещё не импортированы.</p>'
   return '<section class="documents-intro"><p>Оригинальные PDF и графики хранятся только на этом устройстве. Нажмите график, чтобы открыть его.</p><button class="primary" id="import">Импортировать PDF</button></section><h2 class="list-title">Загруженные графики</h2><section class="documents">' + rows + '</section><p class="documents-hint">Повторный импорт заменяет только соответствующий месяц и не создаёт дублей.</p>'
 }
@@ -286,6 +333,8 @@ function bind() {
   document.querySelector('#next')?.addEventListener('click', () => moveMonth(1))
   document.querySelector('#picker')?.addEventListener('click', showMonths)
   document.querySelector('#settings')?.addEventListener('click', showSettings)
+  document.querySelector('#sync-month')?.addEventListener('click', () => void beginMonthSync(selected))
+  document.querySelector('#unsync-month')?.addEventListener('click', () => void beginRemoveMonthEvents(selected))
   document.querySelectorAll<HTMLButtonElement>('[data-section]').forEach(button => button.onclick = () => { section = button.dataset.section as 'calendar' | 'documents'; selectedDate = null; render() })
   document.querySelectorAll<HTMLElement>('[data-open-pdf]').forEach(item => {
     const open = () => {
@@ -303,11 +352,7 @@ function bind() {
   })
   document.querySelectorAll<HTMLButtonElement>('[data-delete-month]').forEach(button => button.onclick = async event => {
     event.stopPropagation()
-    const id = button.dataset.deleteMonth!
-    if (confirm('Удалить ' + humanMonth(id) + ' вместе со всеми сменами и PDF?')) {
-      await storage.remove(id)
-      await refresh()
-    }
+    await deleteLocalMonth(button.dataset.deleteMonth!)
   })
   const calendar = document.querySelector<HTMLElement>('#calendar')
   calendar?.addEventListener('click', event => {
@@ -508,7 +553,7 @@ async function onFile(event: Event) {
 }
 
 async function chooseDelta(parsed: ParsedSchedule) {
-  const preferred = await storage.setting<string>('deltaNumber')
+  const preferred = currentDelta || await storage.setting<string>('deltaNumber')
   const automatic = preferred && parsed.candidates.find(candidate => candidate.number === preferred)
   if (automatic && !parsed.warnings.length) {
     await savePick(automatic)
@@ -524,9 +569,22 @@ async function chooseDelta(parsed: ParsedSchedule) {
   document.querySelector('#cancel')!.addEventListener('click', close)
 }
 
-async function savePick(candidate: Candidate) {
+async function savePick(candidate: Candidate, deltaChangeConfirmed = false) {
   if (!pending) return
+  if (!deltaChangeConfirmed && currentDelta && candidate.number !== currentDelta) {
+    const oldSyncs = calendarSyncs.filter(sync => sync.deltaNumber === currentDelta && Object.keys(sync.events).length)
+    if (oldSyncs.length) {
+      const oldDelta = currentDelta
+      const count = oldSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+      open('<h2>Импорт меняет D-номер</h2><p>Вы выбрали ' + esc(candidate.number) + ', а для ' + esc(oldDelta) + ' в Google отслеживается событий: ' + count + '. Номера не будут смешаны.</p><button class="primary" id="keep-import">Импортировать, события ' + esc(oldDelta) + ' оставить</button><button class="danger" id="remove-import">Сначала удалить события ' + esc(oldDelta) + '</button><button id="cancel">Отмена</button>')
+      document.querySelector('#cancel')?.addEventListener('click', close)
+      document.querySelector('#keep-import')?.addEventListener('click', () => void savePick(candidate, true))
+      document.querySelector('#remove-import')?.addEventListener('click', () => void removeSyncRecords(oldSyncs, () => savePick(candidate, true)))
+      return
+    }
+  }
   const old = months.find(month => month.id === pending!.parsed.month)
+  const hadSync = Boolean(syncFor(pending.parsed.month, candidate.number)?.syncedAt)
   const hash = await digest(pending.file)
   const record: MonthRecord = {
     id: pending.parsed.month,
@@ -534,6 +592,7 @@ async function savePick(candidate: Candidate) {
     importedAt: Date.now(),
     hash,
     marks: candidate.marks,
+    candidates: pending.parsed.candidates,
     shifts: candidate.shifts,
     leaveDates: candidate.leaveDates,
     leaveCodes: candidate.leaveCodes,
@@ -543,12 +602,14 @@ async function savePick(candidate: Candidate) {
   }
   await storage.saveImport(record, pending.file)
   await storage.set('deltaNumber', candidate.number)
+  currentDelta = candidate.number
   close()
   pending = null
   selected = record.id
   selectedDate = null
+  if (!old) highlightSyncOffer = true
   await refresh()
-  if (!old) calendarOffer()
+  if (hadSync) showImportedSyncChanges(record.id)
 }
 
 async function digest(file: File) {
@@ -556,8 +617,175 @@ async function digest(file: File) {
   return [...new Uint8Array(value)].map(item => item.toString(16).padStart(2, '0')).join('')
 }
 
+function syncErrorKind(error: unknown): 'auth' | 'offline' | 'api' {
+  if (error instanceof GoogleAuthError) return 'auth'
+  if (!navigator.onLine || error instanceof TypeError) return 'offline'
+  return 'api'
+}
+
+async function rememberSyncError(month: string, error: unknown, deltaNumber = currentDelta) {
+  const previous = syncFor(month, deltaNumber)
+  const record: CalendarMonthSync = previous
+    ? { ...previous, lastError: syncErrorKind(error) }
+    : { id: `${month}|${deltaNumber}`, month, deltaNumber, events: {}, lastError: syncErrorKind(error) }
+  await storage.putSync(record)
+  calendarSyncs = [...calendarSyncs.filter(item => item.id !== record.id), record]
+}
+
+function googleErrorText(error: unknown) {
+  if (error instanceof GoogleAuthError) return error.message
+  if (!navigator.onLine || error instanceof TypeError) return 'Нет подключения к интернету. Локальный календарь продолжает работать.'
+  if (error instanceof GoogleApiError && error.status === 412) return 'Событие изменилось в Google Calendar во время подтверждения. Запустите проверку ещё раз.'
+  return error instanceof Error ? error.message : 'Не удалось выполнить операцию Google Calendar.'
+}
+
+async function handleGoogleError(month: string, error: unknown, deltaNumber = currentDelta) {
+  await rememberSyncError(month, error, deltaNumber)
+  render()
+  open('<h2>Google Calendar</h2><p>' + esc(googleErrorText(error)) + '</p><button class="primary" id="close">Понятно</button>')
+  document.querySelector('#close')?.addEventListener('click', close)
+}
+
+async function withGoogleAuthorization(month: string, action: () => Promise<void>, errorDelta = currentDelta) {
+  if (!navigator.onLine) {
+    await handleGoogleError(month, new TypeError('offline'), errorDelta)
+    return
+  }
+  if (hasLiveGoogleToken()) {
+    try { await action() } catch (error) { await handleGoogleError(month, error, errorDelta) }
+    return
+  }
+  try {
+    open('<div class="busy"><div class="spinner"></div><h2>Готовим вход через Google</h2><p>PDF и весь график остаются на устройстве.</p></div>')
+    await prepareGoogleIdentityServices()
+    open('<h2>Google Calendar</h2><p>Google получит только события, которые вы подтвердите для основного календаря. Токен доступа хранится только в памяти до окончания сеанса.</p><button class="primary" id="google-continue">Продолжить с Google</button><button id="cancel">Отмена</button>')
+    document.querySelector('#cancel')?.addEventListener('click', close)
+    document.querySelector<HTMLButtonElement>('#google-continue')?.addEventListener('click', async event => {
+      const button = event.currentTarget as HTMLButtonElement
+      button.disabled = true
+      try {
+        await requestGoogleToken(!googleSettings.enabled)
+        googleSettings = { ...googleSettings, enabled: true, connectedAt: googleSettings.connectedAt || Date.now() }
+        await storage.set('googleIntegration', googleSettings)
+        await action()
+      } catch (error) {
+        await handleGoogleError(month, error, errorDelta)
+      }
+    })
+  } catch (error) {
+    await handleGoogleError(month, error, errorDelta)
+  }
+}
+
+async function installationId() {
+  const saved = await storage.setting<string>('installationId')
+  if (saved) return saved
+  const bytes = crypto.getRandomValues(new Uint8Array(16))
+  const value = [...bytes].map(byte => byte.toString(16).padStart(2, '0')).join('')
+  await storage.set('installationId', value)
+  return value
+}
+
+function previewRows(month: string, plan: ReturnType<typeof planCalendarSync>) {
+  const row = (sign: string, title: string, detail: string, tone: string) => '<li class="' + tone + '"><b>' + sign + '</b><span>' + esc(title) + '<small>' + esc(detail) + '</small></span></li>'
+  const eventText = (draft: ReturnType<typeof desiredFor>[number]) => {
+    const start = draft.start.dateTime.slice(11, 16)
+    const end = draft.end.dateTime.slice(11, 16)
+    const nextDay = draft.start.dateTime.slice(0, 10) !== draft.end.dateTime.slice(0, 10)
+    return `${draft.summary} · ${start}–${end}${nextDay ? ' следующего дня' : ''}`
+  }
+  return [
+    ...plan.added.map(draft => row('+', date(draft.date), eventText(draft), 'added')),
+    ...plan.changed.map(change => row('↻', date(change.after.date), eventText(change.before.draft) + ' → ' + eventText(change.after), 'changed')),
+    ...plan.removed.map(event => row('−', date(event.draft.date), eventText(event.draft), 'removed')),
+  ].join('')
+}
+
+async function beginMonthSync(month: string) {
+  highlightSyncOffer = false
+  await withGoogleAuthorization(month, () => previewMonthSync(month, false))
+}
+
+async function beginRemoveMonthEvents(month: string, after?: () => Promise<void>) {
+  await withGoogleAuthorization(month, () => previewMonthSync(month, true, after))
+}
+
+async function previewMonthSync(month: string, removeAll: boolean, after?: () => Promise<void>) {
+  const previous = syncFor(month)
+  const desired = removeAll ? [] : desiredFor(month)
+  try {
+    open('<div class="busy"><div class="spinner"></div><h2>Проверяем Google Calendar</h2><p>Сверяем только события, созданные этой PWA.</p></div>')
+    const audits: RemoteAudit[] = previous ? await auditCalendarSync(previous, googleCalendarGateway) : []
+    const plan = planCalendarSync(desired, previous)
+    const remoteChanged = audits.filter(audit => audit.status === 'changed').length
+    const remoteMissing = audits.filter(audit => audit.status === 'missing').length
+    const unsafe = audits.filter(audit => audit.status === 'unsafe').length
+    const hasWork = plan.added.length + plan.changed.length + plan.removed.length + remoteChanged + remoteMissing + unsafe > 0
+    if (!hasWork) {
+      if (removeAll) {
+        if (previous) await storage.removeSync(previous.id)
+        if (after) await after()
+        await refresh()
+        open('<h2>Событий нет</h2><p>Для ' + humanMonth(month) + ' и ' + esc(currentDelta) + ' в Google Calendar ничего не осталось.</p><button class="primary" id="close">Готово</button>')
+        document.querySelector('#close')?.addEventListener('click', close)
+        return
+      }
+      const record: CalendarMonthSync = previous
+        ? { ...previous, syncedAt: Date.now(), lastError: undefined }
+        : { id: `${month}|${currentDelta}`, month, deltaNumber: currentDelta, syncedAt: Date.now(), events: {} }
+      await storage.putSync(record)
+      googleSettings = { ...googleSettings, enabled: true, lastSyncAt: record.syncedAt }
+      await storage.set('googleIntegration', googleSettings)
+      await refresh()
+      open('<h2>Всё актуально</h2><p>Изменений для ' + humanMonth(month) + ' и ' + esc(currentDelta) + ' нет.</p><button class="primary" id="close">Готово</button>')
+      document.querySelector('#close')?.addEventListener('click', close)
+      return
+    }
+    const warning = (remoteChanged || remoteMissing)
+      ? '<aside class="sync-warning"><b>Изменения непосредственно в Google</b><span>' + (remoteChanged ? `Изменено вручную: ${remoteChanged}. ` : '') + (remoteMissing ? `Удалено вручную: ${remoteMissing}. ` : '') + 'После подтверждения события будут восстановлены по PDF.</span></aside>'
+      : ''
+    const unsafeWarning = unsafe
+      ? '<aside class="sync-warning"><b>Потеряна метка принадлежности: ' + unsafe + '</b><span>Эти события не будут изменены или удалены. При необходимости PWA создаст безопасную замену.</span></aside>'
+      : ''
+    const title = removeAll ? 'Удалить события из Google?' : 'Подтвердите синхронизацию'
+    const rows = previewRows(month, plan)
+    open('<h2>' + title + '</h2><p><b>' + syncSummary(plan) + '</b><br>Основной календарь · ' + esc(currentDelta) + '</p>' + warning + unsafeWarning + (rows ? '<ul class="sync-preview">' + rows + '</ul>' : '') + '<button class="primary" id="apply-sync">' + (removeAll ? 'Удалить отмеченные события' : 'Применить изменения') + '</button><button id="cancel">Отмена</button>')
+    document.querySelector('#cancel')?.addEventListener('click', close)
+    document.querySelector<HTMLButtonElement>('#apply-sync')?.addEventListener('click', async event => {
+      const button = event.currentTarget as HTMLButtonElement
+      button.disabled = true
+      try {
+        if (!hasLiveGoogleToken()) await requestGoogleToken(false)
+        const install = await installationId()
+        open('<div class="busy"><div class="spinner"></div><h2>Обновляем Google Calendar</h2><p>Не закрывайте это окно.</p></div>')
+        const result = await applyCalendarSync({
+          month,
+          deltaNumber: currentDelta,
+          desired,
+          previous,
+          audits,
+          gateway: googleCalendarGateway,
+          eventId: (key, recovery) => deterministicGoogleEventId(install, `${month}|${currentDelta}`, key, recovery),
+        })
+        if (removeAll) await storage.removeSync(result.id)
+        else await storage.putSync(result)
+        googleSettings = { ...googleSettings, enabled: true, lastSyncAt: result.syncedAt }
+        await storage.set('googleIntegration', googleSettings)
+        if (after) await after()
+        await refresh()
+        open('<h2>' + (removeAll ? 'События удалены' : 'Синхронизация завершена') + '</h2><p>Изменения применены только к событиям PWA для ' + humanMonth(month) + ' и ' + esc(currentDelta) + '.</p><button class="primary" id="close">Готово</button>')
+        document.querySelector('#close')?.addEventListener('click', close)
+      } catch (error) {
+        await handleGoogleError(month, error)
+      }
+    })
+  } catch (error) {
+    await handleGoogleError(month, error)
+  }
+}
+
 function showMonths() {
-  const choices = months.map(month => '<button class="choice" data-month="' + month.id + '"><b>' + humanMonth(month.id) + '</b><span>' + esc(month.fileName) + ' · ' + month.shifts.length + ' подтверждённых рабочих отметок</span></button>').join('')
+  const choices = months.map(month => '<button class="choice" data-month="' + month.id + '"><b>' + humanMonth(month.id) + '</b><span>' + esc(month.fileName) + ' · ' + (candidateForMonth(month, currentDelta)?.shifts.length || 0) + ' подтверждённых отметок для ' + esc(currentDelta) + '</span></button>').join('')
   open('<h2>Загруженные месяцы</h2><div class="choices">' + choices + '</div><button class="primary" id="close">Закрыть</button>')
   document.querySelectorAll<HTMLElement>('[data-month]').forEach(item => item.addEventListener('click', () => {
     selected = item.dataset.month!
@@ -568,27 +796,162 @@ function showMonths() {
   document.querySelector('#close')!.addEventListener('click', close)
 }
 
-function calendarOffer() {
-  setTimeout(() => {
-    open('<h2>Синхронизировать с Google Calendar?</h2><p>В будущем вы сможете по явному действию создать отдельный календарь смен. Сейчас интеграция ожидает настройки безопасного OAuth Client ID — приложение полностью работает и без неё.</p><button class="primary" id="ok">Понятно</button>')
-    document.querySelector('#ok')?.addEventListener('click', close)
-  }, 60)
+function showImportedSyncChanges(month: string) {
+  const sync = syncFor(month)
+  if (!sync) return
+  const plan = planCalendarSync(desiredFor(month), sync)
+  if (!plan.added.length && !plan.changed.length && !plan.removed.length) return
+  open('<h2>График уточнён</h2><p><b>' + syncSummary(plan) + '</b><br>События Google пока не изменены.</p><button class="primary" id="review-sync">Проверить и синхронизировать</button><button id="cancel">Позже</button>')
+  document.querySelector('#cancel')?.addEventListener('click', close)
+  document.querySelector('#review-sync')?.addEventListener('click', () => void beginMonthSync(month))
 }
 
 function showSettings() {
-  open('<h2>Настройки</h2><p>Данные хранятся в IndexedDB браузера. Удаление нельзя отменить.</p><button class="calendar-button" id="google">Google Calendar <span>Скоро</span></button><button class="danger" id="wipe">Удалить все локальные данные</button><button class="primary" id="close">Закрыть</button>')
-  document.querySelector('#close')!.addEventListener('click', close)
-  document.querySelector('#google')!.addEventListener('click', () => {
-    open('<h2>Google Calendar</h2><p>Синхронизация будет создавать отдельный календарь смен и запрашивать доступ только по вашему действию. Для включения нужен production OAuth Client ID; сейчас ни аккаунт, ни данные не передаются.</p><button class="primary" id="close">Понятно</button>')
-    document.querySelector('#close')!.addEventListener('click', close)
-  })
-  document.querySelector('#wipe')!.addEventListener('click', async () => {
-    if (confirm('Удалить все PDF-метаданные, смены и настройки с этого устройства?')) {
+  const tracked = calendarSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  const googleLabel = googleSettings.enabled ? 'Подключено' : 'Не подключено'
+  const lastSync = googleSettings.lastSyncAt ? new Date(googleSettings.lastSyncAt).toLocaleString('ru-RU') : 'синхронизаций ещё не было'
+  open('<h2>Настройки</h2><p>Данные графиков хранятся в IndexedDB только на этом устройстве.</p><button class="calendar-button" id="delta-settings">Текущий D-номер <span>' + esc(currentDelta || 'не выбран') + '</span></button><button class="calendar-button" id="google-settings">Google Calendar <span>' + googleLabel + '</span></button><small class="settings-note">Последняя синхронизация: ' + esc(lastSync) + (tracked ? ' · управляемых событий: ' + tracked : '') + '</small><button class="danger" id="wipe">Удалить все локальные данные</button><button class="primary" id="close">Закрыть</button>')
+  document.querySelector('#close')?.addEventListener('click', close)
+  document.querySelector('#delta-settings')?.addEventListener('click', showDeltaSettings)
+  document.querySelector('#google-settings')?.addEventListener('click', showGoogleSettings)
+  document.querySelector('#wipe')?.addEventListener('click', async () => {
+    const warning = tracked ? ' События Google Calendar при этом останутся; сначала удалите их через настройки Google Calendar, если они больше не нужны.' : ''
+    if (confirm('Удалить все локальные PDF, графики и настройки с этого устройства?' + warning)) {
       await storage.clear()
+      currentDelta = ''
+      googleSettings = { enabled: false }
       close()
       await refresh()
     }
   })
+}
+
+function showDeltaSettings() {
+  const choices = knownDeltaNumbers(months).map(number => '<button class="choice ' + (number === currentDelta ? 'recommended' : '') + '" data-select-delta="' + esc(number) + '"><b>' + esc(number) + '</b><span>' + (number === currentDelta ? 'Выбран сейчас' : 'Найден в импортированных PDF') + '</span></button>').join('')
+  open('<h2>Текущий D-номер</h2><p>PDF и остальные D-номера сохранятся. Календарь перестроится сразу.</p><div class="choices">' + choices + '</div><button class="primary" id="cancel">Отмена</button>')
+  document.querySelector('#cancel')?.addEventListener('click', showSettings)
+  document.querySelectorAll<HTMLButtonElement>('[data-select-delta]').forEach(button => button.addEventListener('click', () => void proposeDeltaSwitch(button.dataset.selectDelta!)))
+}
+
+async function proposeDeltaSwitch(nextDelta: string) {
+  if (nextDelta === currentDelta) { showSettings(); return }
+  const oldDelta = currentDelta
+  const oldSyncs = calendarSyncs.filter(sync => sync.deltaNumber === oldDelta && Object.keys(sync.events).length)
+  if (!oldSyncs.length) {
+    await applyDeltaSwitch(nextDelta)
+    return
+  }
+  const eventCount = oldSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  open('<h2>' + esc(oldDelta) + ' уже синхронизирован</h2><p>В Google Calendar отслеживается событий: ' + eventCount + '. Они не будут смешаны с ' + esc(nextDelta) + '.</p><button class="primary" id="keep-and-switch">Сменить D-номер, события оставить</button><button class="danger" id="remove-and-switch">Удалить события ' + esc(oldDelta) + ' из Google</button><button id="cancel">Отмена</button>')
+  document.querySelector('#cancel')?.addEventListener('click', showDeltaSettings)
+  document.querySelector('#keep-and-switch')?.addEventListener('click', () => void applyDeltaSwitch(nextDelta))
+  document.querySelector('#remove-and-switch')?.addEventListener('click', () => void removeSyncRecords(oldSyncs, () => applyDeltaSwitch(nextDelta)))
+}
+
+async function applyDeltaSwitch(nextDelta: string) {
+  currentDelta = nextDelta
+  selectedDate = null
+  await storage.set('deltaNumber', nextDelta)
+  close()
+  render()
+}
+
+function showGoogleSettings() {
+  const records = calendarSyncs.filter(sync => Object.keys(sync.events).length)
+  const eventCount = records.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  const status = googleSettings.enabled
+    ? 'Интеграция включена. При новом сеансе Google может снова запросить кратковременную авторизацию.'
+    : 'Интеграция выключена. Локальные функции работают без Google.'
+  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + (googleSettings.enabled ? '<button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
+  document.querySelector('#back')?.addEventListener('click', showSettings)
+  document.querySelector('#connect-google')?.addEventListener('click', () => void connectGoogleFromSettings())
+  document.querySelector('#disconnect-google')?.addEventListener('click', async () => {
+    await revokeGoogleAccess()
+    googleSettings = { ...googleSettings, enabled: false }
+    await storage.set('googleIntegration', googleSettings)
+    showGoogleSettings()
+  })
+  document.querySelector('#remove-all-google')?.addEventListener('click', () => void removeSyncRecords(records, async () => {}))
+}
+
+async function connectGoogleFromSettings() {
+  if (!navigator.onLine) {
+    open('<h2>Нет сети</h2><p>Подключение Google требует интернет. Все локальные функции доступны офлайн.</p><button class="primary" id="back">Понятно</button>')
+    document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+    return
+  }
+  try {
+    open('<div class="busy"><div class="spinner"></div><h2>Готовим вход через Google</h2></div>')
+    await prepareGoogleIdentityServices()
+    open('<h2>Подключить Google Calendar?</h2><p>Токен не сохраняется долговременно. Никакие события не будут созданы до отдельного подтверждения синхронизации месяца.</p><button class="primary" id="authorize-google">Продолжить с Google</button><button id="back">Отмена</button>')
+    document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+    document.querySelector('#authorize-google')?.addEventListener('click', async () => {
+      try {
+        await requestGoogleToken(true)
+        googleSettings = { ...googleSettings, enabled: true, connectedAt: googleSettings.connectedAt || Date.now() }
+        await storage.set('googleIntegration', googleSettings)
+        showGoogleSettings()
+      } catch (error) {
+        open('<h2>Не удалось подключить</h2><p>' + esc(googleErrorText(error)) + '</p><button class="primary" id="back">Понятно</button>')
+        document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+      }
+    })
+  } catch (error) {
+    open('<h2>Не удалось подключить</h2><p>' + esc(googleErrorText(error)) + '</p><button class="primary" id="back">Понятно</button>')
+    document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+  }
+}
+
+async function deleteLocalMonth(id: string) {
+  const syncRecords = calendarSyncs.filter(sync => sync.month === id && Object.keys(sync.events).length)
+  const removeLocal = async () => { await storage.remove(id) }
+  if (!syncRecords.length) {
+    if (confirm('Удалить ' + humanMonth(id) + ' из приложения? Исходный PDF в папке устройства не удаляется.')) {
+      await removeLocal()
+      await refresh()
+    }
+    return
+  }
+  const count = syncRecords.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  open('<h2>Месяц синхронизирован</h2><p>В Google Calendar отслеживается событий: ' + count + '. Исходный PDF вне приложения не удаляется.</p><button class="primary" id="local-only">Удалить только локально</button><button class="danger" id="local-and-google">Удалить также события Google</button><button id="cancel">Отмена</button>')
+  document.querySelector('#cancel')?.addEventListener('click', close)
+  document.querySelector('#local-only')?.addEventListener('click', async () => { await removeLocal(); close(); await refresh() })
+  document.querySelector('#local-and-google')?.addEventListener('click', () => void removeSyncRecords(syncRecords, removeLocal))
+}
+
+async function removeSyncRecords(records: CalendarMonthSync[], after: () => Promise<void>) {
+  if (!records.length) { await after(); await refresh(); return }
+  const contextMonth = records[0].month
+  await withGoogleAuthorization(contextMonth, async () => {
+    open('<div class="busy"><div class="spinner"></div><h2>Проверяем события Google</h2></div>')
+    const audited: Array<{ sync: CalendarMonthSync; audits: RemoteAudit[] }> = []
+    for (const sync of records) audited.push({ sync, audits: await auditCalendarSync(sync, googleCalendarGateway) })
+    const total = records.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+    const changed = audited.flatMap(item => item.audits).filter(audit => audit.status === 'changed').length
+    const missing = audited.flatMap(item => item.audits).filter(audit => audit.status === 'missing').length
+    const unsafe = audited.flatMap(item => item.audits).filter(audit => audit.status === 'unsafe').length
+    open('<h2>Удалить события PWA из Google?</h2><p>Отслеживаемых событий: ' + total + '.' + (changed ? ' Изменено вручную: ' + changed + '.' : '') + (missing ? ' Уже удалено: ' + missing + '.' : '') + '</p>' + (unsafe ? '<aside class="sync-warning"><b>Без метки PWA: ' + unsafe + '</b><span>Они не будут затронуты.</span></aside>' : '') + '<button class="danger" id="confirm-remove-google">Удалить подтверждённые события</button><button id="cancel">Отмена</button>')
+    document.querySelector('#cancel')?.addEventListener('click', close)
+    document.querySelector('#confirm-remove-google')?.addEventListener('click', async () => {
+      try {
+        if (!hasLiveGoogleToken()) await requestGoogleToken(false)
+        open('<div class="busy"><div class="spinner"></div><h2>Удаляем события PWA</h2></div>')
+        const install = await installationId()
+        for (const item of audited) {
+          await applyCalendarSync({ month: item.sync.month, deltaNumber: item.sync.deltaNumber, desired: [], previous: item.sync, audits: item.audits, gateway: googleCalendarGateway, eventId: (key, recovery) => deterministicGoogleEventId(install, item.sync.id, key, recovery) })
+          await storage.removeSync(item.sync.id)
+        }
+        await after()
+        googleSettings = { ...googleSettings, lastSyncAt: Date.now() }
+        await storage.set('googleIntegration', googleSettings)
+        await refresh()
+        open('<h2>Готово</h2><p>Удалены только события, однозначно отмеченные как созданные этой PWA.</p><button class="primary" id="close">Закрыть</button>')
+        document.querySelector('#close')?.addEventListener('click', close)
+      } catch (error) {
+        await handleGoogleError(contextMonth, error, records[0].deltaNumber)
+      }
+    })
+  }, records[0].deltaNumber)
 }
 
 function open(html: string) {
@@ -633,4 +996,6 @@ applyUpdate = registerSW({ onNeedRefresh: offerUpdate })
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && !monthTransitioning && !document.querySelector<HTMLDialogElement>('#dialog')?.open) render()
 })
+window.addEventListener('online', render)
+window.addEventListener('offline', render)
 refresh()

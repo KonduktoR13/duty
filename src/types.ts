@@ -6,6 +6,41 @@ export type DayMark =
   | { date: string; kind: 'leave'; raw: LeaveCode }
   | { date: string; kind: 'other'; raw: string }
 
+export type CalendarEventDraft = {
+  key: string
+  date: string
+  kind: 'hours' | 'home'
+  raw: string
+  hours: number
+  summary: string
+  description: string
+  start: { dateTime: string; timeZone: string }
+  end: { dateTime: string; timeZone: string }
+}
+
+export type SyncedCalendarEvent = {
+  eventId: string
+  draft: CalendarEventDraft
+  etag?: string
+  updated?: string
+}
+
+export type CalendarSyncError = 'auth' | 'offline' | 'api'
+export type CalendarMonthSync = {
+  id: string
+  month: string
+  deltaNumber: string
+  syncedAt?: number
+  events: Record<string, SyncedCalendarEvent>
+  lastError?: CalendarSyncError
+}
+
+export type GoogleIntegrationSettings = {
+  enabled: boolean
+  connectedAt?: number
+  lastSyncAt?: number
+}
+
 export type MonthRecord = {
   id: string
   fileName: string
@@ -15,6 +50,9 @@ export type MonthRecord = {
   // marks, which can represent several entries in one calendar day.
   shifts: Shift[]
   marks?: DayMark[]
+  // All locally parsed rows are retained so the user can switch D-number and
+  // inspect colleagues without uploading or reparsing the PDF online.
+  candidates?: Candidate[]
   leaveDates?: string[]
   leaveCodes?: Record<string, LeaveCode>
   deltaNumber: string
