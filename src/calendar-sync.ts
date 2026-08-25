@@ -65,7 +65,7 @@ export function buildCalendarDrafts(month: string, deltaNumber: string, marks: D
     for (const mark of dateMarks.sort((a, b) => a.kind.localeCompare(b.kind) || a.raw.localeCompare(b.raw))) {
       const index = (kindCount.get(mark.kind) || 0) + 1
       kindCount.set(mark.kind, index)
-      const key = `${date}:${mark.kind}:${index}`
+      const shiftId = `${date}:${mark.kind}:${index}`
       const onsite12 = dateMarks.some(item => item.kind === 'hours' && item.hours === 12)
       const startHour = mark.kind === 'home' ? (onsite12 && mark.hours <= 4 ? 20 : 0) : 8
       const startMinute = 0
@@ -73,43 +73,90 @@ export function buildCalendarDrafts(month: string, deltaNumber: string, marks: D
       const title = mark.kind === 'home'
         ? `Koduvalve · ${mark.raw}`
         : mark.hours === 24 ? 'Рабочая смена · 24 ч' : `Работа · ${String(mark.hours).replace('.', ',')} ч`
-      drafts.push({
-        key,
+      const start = { dateTime: localDateTime(date, startHour, startMinute), timeZone: CALENDAR_TIME_ZONE }
+      const end = { dateTime: addWallMinutes(date, startHour, startMinute, duration), timeZone: CALENDAR_TIME_ZONE }
+      const base: CalendarEventDraft = {
+        key: shiftId,
+        shiftId,
+        part: '1/1',
         date,
         kind: mark.kind,
         raw: mark.raw,
         hours: mark.hours,
         summary: title,
         description: `Создано PWA «Мои смены» из локального PDF. ${deltaNumber} · код ${mark.raw}.`,
-        start: { dateTime: localDateTime(date, startHour, startMinute), timeZone: CALENDAR_TIME_ZONE },
-        end: { dateTime: addWallMinutes(date, startHour, startMinute, duration), timeZone: CALENDAR_TIME_ZONE },
-      })
+        start,
+        end,
+      }
+      if (start.dateTime.slice(0, 10) === end.dateTime.slice(0, 10) || start.dateTime.endsWith('T00:00:00')) {
+        drafts.push(base)
+      } else {
+        const midnight = { dateTime: `${end.dateTime.slice(0, 10)}T00:00:00`, timeZone: CALENDAR_TIME_ZONE }
+        drafts.push(
+          { ...base, key: `${shiftId}:part1`, part: '1/2', summary: `${title} (1/2)`, end: midnight },
+          { ...base, key: `${shiftId}:part2`, part: '2/2', summary: `${title} (2/2)`, start: midnight },
+        )
+      }
     }
   }
   return drafts.sort((a, b) => a.start.dateTime.localeCompare(b.start.dateTime) || a.key.localeCompare(b.key))
 }
 
 export function draftSignature(draft: CalendarEventDraft) {
-  return JSON.stringify({ summary: draft.summary, description: draft.description, start: draft.start, end: draft.end, raw: draft.raw, hours: draft.hours, kind: draft.kind })
+  return JSON.stringify({ shiftId: logicalShiftId(draft), part: draft.part || '1/1', summary: draft.summary, description: draft.description, start: draft.start, end: draft.end, raw: draft.raw, hours: draft.hours, kind: draft.kind })
+}
+
+export function logicalShiftId(draft: CalendarEventDraft) {
+  return draft.shiftId || draft.key
+}
+
+function groupDrafts(drafts: CalendarEventDraft[]) {
+  const groups = new Map<string, CalendarEventDraft[]>()
+  for (const draft of drafts) groups.set(logicalShiftId(draft), [...(groups.get(logicalShiftId(draft)) || []), draft])
+  return groups
+}
+
+function groupSynced(events: SyncedCalendarEvent[]) {
+  const groups = new Map<string, SyncedCalendarEvent[]>()
+  for (const event of events) groups.set(logicalShiftId(event.draft), [...(groups.get(logicalShiftId(event.draft)) || []), event])
+  return groups
+}
+
+function groupSignature(drafts: CalendarEventDraft[]) {
+  return drafts.map(draftSignature).sort().join('|')
 }
 
 export function planCalendarSync(desired: CalendarEventDraft[], previous?: CalendarMonthSync): SyncPlan {
-  const old = previous?.events || {}
-  const wanted = new Map(desired.map(draft => [draft.key, draft]))
-  const added = desired.filter(draft => !old[draft.key])
-  const changed = desired.filter(draft => old[draft.key] && draftSignature(old[draft.key].draft) !== draftSignature(draft)).map(after => ({ before: old[after.key], after }))
-  const unchanged = desired.filter(draft => old[draft.key] && draftSignature(old[draft.key].draft) === draftSignature(draft)).map(draft => old[draft.key])
-  const removed = Object.values(old).filter(event => !wanted.has(event.draft.key))
+  const wanted = groupDrafts(desired)
+  const old = groupSynced(Object.values(previous?.events || {}))
+  const added: CalendarEventDraft[] = []
+  const changed: Array<{ before: SyncedCalendarEvent; after: CalendarEventDraft }> = []
+  const unchanged: SyncedCalendarEvent[] = []
+  const removed: SyncedCalendarEvent[] = []
+  for (const [shiftId, drafts] of wanted) {
+    const before = old.get(shiftId)
+    if (!before) added.push(drafts[0])
+    else if (groupSignature(before.map(event => event.draft)) !== groupSignature(drafts)) changed.push({ before: before[0], after: drafts[0] })
+    else unchanged.push(before[0])
+  }
+  for (const [shiftId, events] of old) if (!wanted.has(shiftId)) removed.push(events[0])
   return { added, changed, removed, unchanged }
 }
 
-export function privateProperties(month: string, deltaNumber: string, key: string) {
-  return { dutyPwa: CALENDAR_MARKER, month, deltaNumber, syncKey: key }
+export function privateProperties(month: string, deltaNumber: string, key: string, shiftId = key, part = '1/1') {
+  return { dutyPwa: CALENDAR_MARKER, month, deltaNumber, syncKey: key, shiftId, part }
+}
+
+export function privatePropertiesForDraft(month: string, deltaNumber: string, draft: CalendarEventDraft) {
+  // Old persisted events predate segmented shifts and must remain safely
+  // auditable by their original four ownership properties during migration.
+  if (!draft.shiftId) return { dutyPwa: CALENDAR_MARKER, month, deltaNumber, syncKey: draft.key }
+  return privateProperties(month, deltaNumber, draft.key, draft.shiftId, draft.part || '1/1')
 }
 
 export function auditRemoteEvent(sync: CalendarMonthSync, event: SyncedCalendarEvent, remote: RemoteCalendarEvent | null): RemoteAudit {
   if (!remote) return { key: event.draft.key, status: 'missing' }
-  const expected = privateProperties(sync.month, sync.deltaNumber, event.draft.key)
+  const expected = privatePropertiesForDraft(sync.month, sync.deltaNumber, event.draft)
   const actual = remote.extendedProperties?.private || {}
   const managed = Object.entries(expected).every(([key, value]) => actual[key] === value)
   if (!managed) return { key: event.draft.key, status: 'unsafe', remote }
@@ -136,29 +183,51 @@ export async function applyCalendarSync(options: ApplySyncOptions): Promise<Cale
   const { month, deltaNumber, desired, previous, audits, gateway, eventId } = options
   const plan = planCalendarSync(desired, previous)
   const auditByKey = new Map(audits.map(audit => [audit.key, audit]))
-  const changedKeys = new Set(plan.changed.map(item => item.after.key))
+  const changedShiftIds = new Set(plan.changed.map(item => logicalShiftId(item.after)))
+  const desiredGroups = groupDrafts(desired)
+  const oldGroups = groupSynced(Object.values(previous?.events || {}))
   const next: Record<string, SyncedCalendarEvent> = {}
-  for (const draft of desired) {
-    const old = previous?.events[draft.key]
-    const audit = old ? auditByKey.get(draft.key) : undefined
-    let remote: RemoteCalendarEvent
-    if (!old) {
-      remote = await gateway.insert(await eventId(draft.key), draft, privateProperties(month, deltaNumber, draft.key))
-    } else if (audit?.status === 'missing') {
-      remote = await gateway.insert(await eventId(`${draft.key}|missing:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key))
-    } else if (audit?.status === 'unsafe') {
-      remote = await gateway.insert(await eventId(`${draft.key}|unsafe:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key))
-    } else if (changedKeys.has(draft.key) || audit?.status === 'changed') {
-      remote = await gateway.patch(old.eventId, draft, privateProperties(month, deltaNumber, draft.key), audit?.remote?.etag)
-    } else {
-      next[draft.key] = old
+  for (const [shiftId, drafts] of desiredGroups) {
+    const oldEvents = oldGroups.get(shiftId) || []
+    const groupAudits = oldEvents.map(event => auditByKey.get(event.draft.key))
+    const refreshWholeShift = changedShiftIds.has(shiftId) || groupAudits.some(audit => audit && audit.status !== 'ok')
+    if (oldEvents.length && !refreshWholeShift) {
+      for (const event of oldEvents) next[event.draft.key] = event
       continue
     }
-    next[draft.key] = { eventId: remote.id, draft, etag: remote.etag, updated: remote.updated }
+
+    const unclaimed = [...oldEvents]
+    for (const draft of drafts) {
+      let oldIndex = unclaimed.findIndex(event => (event.draft.part || '1/1') === (draft.part || '1/1'))
+      // A pre-segmentation 24-hour event has no part. Reuse it as part 1 so
+      // migration patches that owned event instead of leaving a duplicate.
+      if (oldIndex < 0 && unclaimed.length) oldIndex = 0
+      const old = oldIndex >= 0 ? unclaimed.splice(oldIndex, 1)[0] : undefined
+      const audit = old ? auditByKey.get(old.draft.key) : undefined
+      const properties = privatePropertiesForDraft(month, deltaNumber, draft)
+      let remote: RemoteCalendarEvent
+      if (!old) {
+        remote = await gateway.insert(await eventId(draft.key), draft, properties)
+      } else if (audit?.status === 'missing') {
+        remote = await gateway.insert(await eventId(`${draft.key}|missing:${old.eventId}`, true), draft, properties)
+      } else if (audit?.status === 'unsafe') {
+        remote = await gateway.insert(await eventId(`${draft.key}|unsafe:${old.eventId}`, true), draft, properties)
+      } else {
+        remote = await gateway.patch(old.eventId, draft, properties, audit?.remote?.etag)
+      }
+      next[draft.key] = { eventId: remote.id, draft, etag: remote.etag, updated: remote.updated }
+    }
+    for (const old of unclaimed) {
+      const audit = auditByKey.get(old.draft.key)
+      if (audit?.status === 'ok' || audit?.status === 'changed') await gateway.remove(old.eventId, audit.remote?.etag)
+    }
   }
-  for (const old of plan.removed) {
-    const audit = auditByKey.get(old.draft.key)
-    if (audit?.status === 'ok' || audit?.status === 'changed') await gateway.remove(old.eventId, audit.remote?.etag)
+  for (const [shiftId, oldEvents] of oldGroups) {
+    if (desiredGroups.has(shiftId)) continue
+    for (const old of oldEvents) {
+      const audit = auditByKey.get(old.draft.key)
+      if (audit?.status === 'ok' || audit?.status === 'changed') await gateway.remove(old.eventId, audit.remote?.etag)
+    }
   }
   return { id: `${month}|${deltaNumber}`, month, deltaNumber, syncedAt: options.now || Date.now(), events: next }
 }

@@ -2,7 +2,7 @@ import { registerSW } from 'virtual:pwa-register'
 import { storage } from './db'
 import { parsePdf } from './parser'
 import { allMarksForDelta, candidateForMonth, candidatesForMonth, foreignEntriesByDate, isWorkMark, knownDeltaNumbers, migrateMark, type ForeignDayEntry, type WorkMark } from './roster'
-import { applyCalendarSync, auditCalendarSync, buildCalendarDrafts, planCalendarSync, syncSummary, type RemoteAudit } from './calendar-sync'
+import { applyCalendarSync, auditCalendarSync, buildCalendarDrafts, logicalShiftId, planCalendarSync, syncSummary, type RemoteAudit } from './calendar-sync'
 import { deterministicGoogleEventId, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess } from './google-calendar'
 import { humanMonth, timeLabel } from './schedule'
 import type { CalendarMonthSync, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
@@ -38,6 +38,10 @@ let highlightSyncOffer = false
 
 const localDateId = (value = new Date()) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-')
 const todayId = () => localDateId()
+const syncShiftCount = (sync: CalendarMonthSync) => new Set(Object.values(sync.events).map(event => logicalShiftId(event.draft))).size
+const auditShiftCount = (items: Array<{ sync: CalendarMonthSync; audits: RemoteAudit[] }>, status: RemoteAudit['status']) => new Set(items.flatMap(item => item.audits
+  .filter(audit => audit.status === status)
+  .map(audit => `${item.sync.id}|${item.sync.events[audit.key] ? logicalShiftId(item.sync.events[audit.key].draft) : audit.key}`))).size
 const esc = (value: string) => value.replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]!))
 const displayCode = (mark: Pick<WorkMark, 'raw'> | DayMark) => mark.raw === '16+8' ? '24' : mark.raw
 const hoursText = (hours: number) => `${String(hours).replace('.', ',')} ч`
@@ -575,7 +579,7 @@ async function savePick(candidate: Candidate, deltaChangeConfirmed = false) {
     const oldSyncs = calendarSyncs.filter(sync => sync.deltaNumber === currentDelta && Object.keys(sync.events).length)
     if (oldSyncs.length) {
       const oldDelta = currentDelta
-      const count = oldSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+      const count = oldSyncs.reduce((sum, sync) => sum + syncShiftCount(sync), 0)
       open('<h2>Импорт меняет D-номер</h2><p>Вы выбрали ' + esc(candidate.number) + ', а для ' + esc(oldDelta) + ' в Google отслеживается событий: ' + count + '. Номера не будут смешаны.</p><button class="primary" id="keep-import">Импортировать, события ' + esc(oldDelta) + ' оставить</button><button class="danger" id="remove-import">Сначала удалить события ' + esc(oldDelta) + '</button><button id="cancel">Отмена</button>')
       document.querySelector('#cancel')?.addEventListener('click', close)
       document.querySelector('#keep-import')?.addEventListener('click', () => void savePick(candidate, true))
@@ -690,9 +694,14 @@ function previewRows(month: string, plan: ReturnType<typeof planCalendarSync>) {
   const row = (sign: string, title: string, detail: string, tone: string) => '<li class="' + tone + '"><b>' + sign + '</b><span>' + esc(title) + '<small>' + esc(detail) + '</small></span></li>'
   const eventText = (draft: ReturnType<typeof desiredFor>[number]) => {
     const start = draft.start.dateTime.slice(11, 16)
-    const end = draft.end.dateTime.slice(11, 16)
-    const nextDay = draft.start.dateTime.slice(0, 10) !== draft.end.dateTime.slice(0, 10)
-    return `${draft.summary} · ${start}–${end}${nextDay ? ' следующего дня' : ''}`
+    const segmented = draft.part === '1/2' || draft.part === '2/2'
+    const logicalEnd = segmented
+      ? new Date(new Date(draft.date + 'T08:00:00Z').getTime() + draft.hours * 3_600_000).toISOString().slice(0, 19)
+      : draft.end.dateTime
+    const end = logicalEnd.slice(11, 16)
+    const nextDay = draft.start.dateTime.slice(0, 10) !== logicalEnd.slice(0, 10)
+    const title = draft.summary.replace(/ \([12]\/2\)$/, '')
+    return `${title} · ${start}–${end}${nextDay ? ' следующего дня' : ''}${segmented ? ' · 2 связанных события' : ''}`
   }
   return [
     ...plan.added.map(draft => row('+', date(draft.date), eventText(draft), 'added')),
@@ -717,9 +726,10 @@ async function previewMonthSync(month: string, removeAll: boolean, after?: () =>
     open('<div class="busy"><div class="spinner"></div><h2>Проверяем Google Calendar</h2><p>Сверяем только события, созданные этой PWA.</p></div>')
     const audits: RemoteAudit[] = previous ? await auditCalendarSync(previous, googleCalendarGateway) : []
     const plan = planCalendarSync(desired, previous)
-    const remoteChanged = audits.filter(audit => audit.status === 'changed').length
-    const remoteMissing = audits.filter(audit => audit.status === 'missing').length
-    const unsafe = audits.filter(audit => audit.status === 'unsafe').length
+    const auditedMonth = previous ? [{ sync: previous, audits }] : []
+    const remoteChanged = auditShiftCount(auditedMonth, 'changed')
+    const remoteMissing = auditShiftCount(auditedMonth, 'missing')
+    const unsafe = auditShiftCount(auditedMonth, 'unsafe')
     const hasWork = plan.added.length + plan.changed.length + plan.removed.length + remoteChanged + remoteMissing + unsafe > 0
     if (!hasWork) {
       if (removeAll) {
@@ -807,7 +817,7 @@ function showImportedSyncChanges(month: string) {
 }
 
 function showSettings() {
-  const tracked = calendarSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  const tracked = calendarSyncs.reduce((sum, sync) => sum + syncShiftCount(sync), 0)
   const googleLabel = googleSettings.enabled ? 'Подключено' : 'Не подключено'
   const lastSync = googleSettings.lastSyncAt ? new Date(googleSettings.lastSyncAt).toLocaleString('ru-RU') : 'синхронизаций ещё не было'
   open('<h2>Настройки</h2><p>Данные графиков хранятся в IndexedDB только на этом устройстве.</p><button class="calendar-button" id="delta-settings">Текущий D-номер <span>' + esc(currentDelta || 'не выбран') + '</span></button><button class="calendar-button" id="google-settings">Google Calendar <span>' + googleLabel + '</span></button><small class="settings-note">Последняя синхронизация: ' + esc(lastSync) + (tracked ? ' · управляемых событий: ' + tracked : '') + '</small><button class="danger" id="wipe">Удалить все локальные данные</button><button class="primary" id="close">Закрыть</button>')
@@ -841,7 +851,7 @@ async function proposeDeltaSwitch(nextDelta: string) {
     await applyDeltaSwitch(nextDelta)
     return
   }
-  const eventCount = oldSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  const eventCount = oldSyncs.reduce((sum, sync) => sum + syncShiftCount(sync), 0)
   open('<h2>' + esc(oldDelta) + ' уже синхронизирован</h2><p>В Google Calendar отслеживается событий: ' + eventCount + '. Они не будут смешаны с ' + esc(nextDelta) + '.</p><button class="primary" id="keep-and-switch">Сменить D-номер, события оставить</button><button class="danger" id="remove-and-switch">Удалить события ' + esc(oldDelta) + ' из Google</button><button id="cancel">Отмена</button>')
   document.querySelector('#cancel')?.addEventListener('click', showDeltaSettings)
   document.querySelector('#keep-and-switch')?.addEventListener('click', () => void applyDeltaSwitch(nextDelta))
@@ -858,7 +868,7 @@ async function applyDeltaSwitch(nextDelta: string) {
 
 function showGoogleSettings() {
   const records = calendarSyncs.filter(sync => Object.keys(sync.events).length)
-  const eventCount = records.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  const eventCount = records.reduce((sum, sync) => sum + syncShiftCount(sync), 0)
   const status = googleSettings.enabled
     ? 'Интеграция включена. При новом сеансе Google может снова запросить кратковременную авторизацию.'
     : 'Интеграция выключена. Локальные функции работают без Google.'
@@ -912,7 +922,7 @@ async function deleteLocalMonth(id: string) {
     }
     return
   }
-  const count = syncRecords.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  const count = syncRecords.reduce((sum, sync) => sum + syncShiftCount(sync), 0)
   open('<h2>Месяц синхронизирован</h2><p>В Google Calendar отслеживается событий: ' + count + '. Исходный PDF вне приложения не удаляется.</p><button class="primary" id="local-only">Удалить только локально</button><button class="danger" id="local-and-google">Удалить также события Google</button><button id="cancel">Отмена</button>')
   document.querySelector('#cancel')?.addEventListener('click', close)
   document.querySelector('#local-only')?.addEventListener('click', async () => { await removeLocal(); close(); await refresh() })
@@ -926,10 +936,10 @@ async function removeSyncRecords(records: CalendarMonthSync[], after: () => Prom
     open('<div class="busy"><div class="spinner"></div><h2>Проверяем события Google</h2></div>')
     const audited: Array<{ sync: CalendarMonthSync; audits: RemoteAudit[] }> = []
     for (const sync of records) audited.push({ sync, audits: await auditCalendarSync(sync, googleCalendarGateway) })
-    const total = records.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
-    const changed = audited.flatMap(item => item.audits).filter(audit => audit.status === 'changed').length
-    const missing = audited.flatMap(item => item.audits).filter(audit => audit.status === 'missing').length
-    const unsafe = audited.flatMap(item => item.audits).filter(audit => audit.status === 'unsafe').length
+    const total = records.reduce((sum, sync) => sum + syncShiftCount(sync), 0)
+    const changed = auditShiftCount(audited, 'changed')
+    const missing = auditShiftCount(audited, 'missing')
+    const unsafe = auditShiftCount(audited, 'unsafe')
     open('<h2>Удалить события PWA из Google?</h2><p>Отслеживаемых событий: ' + total + '.' + (changed ? ' Изменено вручную: ' + changed + '.' : '') + (missing ? ' Уже удалено: ' + missing + '.' : '') + '</p>' + (unsafe ? '<aside class="sync-warning"><b>Без метки PWA: ' + unsafe + '</b><span>Они не будут затронуты.</span></aside>' : '') + '<button class="danger" id="confirm-remove-google">Удалить подтверждённые события</button><button id="cancel">Отмена</button>')
     document.querySelector('#cancel')?.addEventListener('click', close)
     document.querySelector('#confirm-remove-google')?.addEventListener('click', async () => {

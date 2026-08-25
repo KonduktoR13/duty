@@ -8,6 +8,10 @@ export type DayMark =
 
 export type CalendarEventDraft = {
   key: string
+  // One logical PDF shift can be represented by several timed Google events.
+  // These fields are optional only for sync records saved by older PWA builds.
+  shiftId?: string
+  part?: string
   date: string
   kind: 'hours' | 'home'
   raw: string
