@@ -321,10 +321,10 @@ function selectedDetails(marksByDate: Map<string, DayMark[]>, month: MonthRecord
 function monthView(month: MonthRecord) {
   const marksByDate = groupMarks(allMarks())
   const foreignByDate = foreignEntriesByDate(months, month.id, currentDelta)
-  return calendarSyncCard(month) + '<section class="calendar-group"><nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav><section class="calendar" id="calendar"><div class="week">' +
+  return '<section class="calendar-group"><nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav><section class="calendar" id="calendar"><div class="week">' +
     ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => '<span>' + day + '</span>').join('') +
     '</div><div class="calendar-viewport" id="calendar-viewport"><div class="calendar-track" id="calendar-track">' + calendarPage(month, marksByDate, foreignByDate) +
-    '</div></div><div class="legend-section"><button class="legend-toggle" id="legend-toggle" aria-expanded="' + legendExpanded + '" aria-controls="calendar-legend"><span>Легенда</span><small>7 обозначений</small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' + (legendExpanded ? ' expanded' : '') + '" id="calendar-legend"><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></div></div></section></section>' +
+    '</div></div><div class="legend-section"><button class="legend-toggle" id="legend-toggle" aria-expanded="' + legendExpanded + '" aria-controls="calendar-legend"><span>Легенда</span><small>7 обозначений</small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' + (legendExpanded ? ' expanded' : '') + '" id="calendar-legend"><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></div></div></section></section>' + calendarSyncCard(month) +
     selectedDetails(marksByDate, month, foreignByDate)
 }
 
@@ -503,16 +503,27 @@ function bind() {
     const button = event.target.closest<HTMLButtonElement>('[data-day]')
     if (button) selectDay(button.dataset.day!)
   })
-  document.querySelector('#detail-close')?.addEventListener('click', () => {
-    selectedDate = null
-    render()
-  })
+  document.querySelector('#detail-close')?.addEventListener('click', closeDayDetails, { once: true })
   enableCalendarSwipe()
 }
 
 function selectDay(value: string) {
-  selectedDate = selectedDate === value ? null : value
+  if (selectedDate === value) { closeDayDetails(); return }
+  selectedDate = value
   render()
+}
+
+function closeDayDetails() {
+  const card = document.querySelector<HTMLElement>('#shift-details')
+  const button = document.querySelector<HTMLButtonElement>('#detail-close')
+  if (!selectedDate || !card) return
+  ignoreDayClicksUntil = Date.now() + 650
+  button?.setAttribute('disabled', '')
+  card.classList.add('closing')
+  window.setTimeout(() => {
+    selectedDate = null
+    render()
+  }, 420)
 }
 
 function prepareMonthTransition(direction: -1 | 1): PreparedMonthTransition | null {
