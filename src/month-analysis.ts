@@ -4,7 +4,7 @@ import type { CalendarEventDraft, MonthRecord } from './types'
 
 export type AnalysisTone = 'ok' | 'attention' | 'info'
 export type AnalysisCheck = {
-  id: 'long-shifts' | 'daily-rest' | 'weekly-rest' | 'average-time' | 'night-work' | 'home-duty' | 'shortened-days' | 'breaks'
+  id: 'operational-shifts' | 'shift-rest' | 'weekly-rest' | 'average-time' | 'home-duty' | 'shortened-days'
   tone: AnalysisTone
   title: string
   value: string
@@ -19,8 +19,8 @@ export type MonthAnalysis = {
   nightHours: number
   homeDutyHours: number
   tentativeHours: number
-  shiftCount: number
-  longShiftCount: number
+  operationalShiftCount: number
+  workdayCount: number
   leaveDays: number
   minimumRestHours?: number
   longestRestHours?: number
@@ -105,16 +105,19 @@ function compensationCheck(onsite: Interval[], allOccupied: Interval[], month: s
   const long = onsite.filter(interval => interval.draft.date.startsWith(month + '-') && interval.draft.hours > 13)
   let failures = 0
   let unknown = 0
-  let shortestMargin = Number.POSITIVE_INFINITY
+  let minimumActual = Number.POSITIVE_INFINITY
   for (const shift of long) {
     const next = allOccupied.find(interval => interval !== shift && interval.start >= shift.end)
     if (!next) { unknown++; continue }
     const actual = (next.start - shift.end) / 60
-    const required = 11 + (shift.draft.hours - 13)
-    shortestMargin = Math.min(shortestMargin, actual - required)
+    // PäästeTS § 20 (8) excludes the general ATS § 41 (1) daily-rest limit
+    // for rescue officials. ATS § 41 (4) still grants immediate compensatory
+    // rest equal to the part of a duty period that exceeded 13 hours.
+    const required = shift.draft.hours - 13
+    minimumActual = Math.min(minimumActual, actual)
     if (actual < required) failures++
   }
-  return { long, failures, unknown, shortestMargin }
+  return { long, failures, unknown, minimumActual }
 }
 
 export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: string): MonthAnalysis {
@@ -124,8 +127,9 @@ export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: 
   const onsiteDrafts = selectedDrafts.filter(draft => draft.kind === 'hours')
   const homeDrafts = selectedDrafts.filter(draft => draft.kind === 'home')
   const onsiteIntervals = intervals(allDrafts.filter(draft => draft.kind === 'hours'))
-  const allOccupiedIntervals = intervals(allDrafts)
-  const occupied = mergeIntervals(allOccupiedIntervals)
+  // PäästeTS § 20 (6) defines a rescue-service standby period as part of rest.
+  // Actual call-outs are work, but they are not encoded in the PDF roster.
+  const occupied = mergeIntervals(onsiteIntervals)
   const gaps = restGaps(occupied, month)
   const selectedNightMinutes = onsiteDrafts.reduce((sum, draft) => sum + nightMinutes(wallMinutes(draft.start.dateTime), wallMinutes(draft.end.dateTime)), 0)
   const workHours = onsiteDrafts.reduce((sum, draft) => sum + draft.hours, 0)
@@ -138,48 +142,54 @@ export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: 
   const weeklyEquivalentHours = roundHours(workHours * 7 * 60 / monthDays)
   const hasPreviousMonth = months.some(item => item.id === monthOffset(month, -1))
   const hasFollowingMonth = months.some(item => item.id === monthOffset(month, 1))
-  const compensation = compensationCheck(onsiteIntervals, allOccupiedIntervals, month)
+  const compensation = compensationCheck(onsiteIntervals, onsiteIntervals, month)
   const minimumRestHours = gaps.length ? Math.min(...gaps.map(gap => gap.hours)) : undefined
   const longestRestHours = gaps.length ? Math.max(...gaps.map(gap => gap.hours)) : undefined
-  const dailyFailure = gaps.some(gap => gap.hours < 11)
   const weeklyRestSeen = gaps.some(gap => gap.hours >= 36)
   const shortenedDates = new Set([`${month.slice(0, 4)}-02-23`, `${month.slice(0, 4)}-06-22`, `${month.slice(0, 4)}-12-23`, `${month.slice(0, 4)}-12-31`])
   const shortenedShifts = onsiteDrafts.filter(draft => shortenedDates.has(draft.date))
 
-  const longShiftCheck: AnalysisCheck = compensation.long.length
-    ? {
-        id: 'long-shifts', tone: 'info', title: 'Смены длиннее 13 часов', value: `${compensation.long.length} × 24 ч`,
-        explanation: 'Обычно рабочий день ограничен 13 часами, потому что за каждые 24 часа нужно дать 11 часов непрерывного отдыха. Смена до 24 часов допустима только для предусмотренной законом работы и при необходимых условиях — например, коллективном соглашении или специальном исключении и оценке рисков. PDF не показывает, выполнены ли эти условия.',
-      }
-    : {
-        id: 'long-shifts', tone: 'ok', title: 'Длина смен', value: 'Не больше 13 ч',
-        explanation: 'В этом месяце приложение не нашло смен длиннее общей 13-часовой границы.',
-      }
-
-  let compensationTone: AnalysisTone = 'ok'
-  let compensationValue = minimumRestHours === undefined ? 'Недостаточно данных' : `Минимум ${roundHours(minimumRestHours * 60)} ч`
-  let compensationExplanation = 'Между показанными рабочими периодами найдено не меньше 11 часов непрерывного отдыха.'
-  if (dailyFailure || compensation.failures) {
-    compensationTone = 'attention'
-    compensationValue = 'Нужно проверить'
-    compensationExplanation = 'Между некоторыми показанными периодами отдыха меньше расчётного минимума. Домашнее дежурство V тоже не считается обычным свободным отдыхом, хотя фактическое время вызовов PDF не показывает. В отдельных предусмотренных законом случаях отдых можно разделить, но одна часть должна длиться не меньше 6 часов; наличие такого соглашения PDF не показывает.'
-  } else if (!gaps.length || compensation.unknown || !hasFollowingMonth || !hasPreviousMonth) {
-    compensationTone = 'info'
-    compensationExplanation = 'Для полной проверки нужны соседние месяцы. После 24-часовой смены до следующей работы должно пройти 22 часа: обычные 11 часов плюс ещё 11 часов за превышение 13-часовой границы.'
-  } else if (compensation.long.length) {
-    compensationExplanation = 'Показанные интервалы отдыха проходят расчётную проверку. После 24-часовой смены приложение требует 22 часа до следующей работы: 11 обычных + 11 компенсирующих.'
+  const operationalCheck: AnalysisCheck = {
+    id: 'operational-shifts', tone: 'ok', title: 'Оперативные смены', value: `${compensation.long.length} × 24 ч`,
+    explanation: 'Для päästeametnik 24-часовая оперативная смена предусмотрена специальным режимом PäästeTS §20(8): обычное ограничение ежедневного отдыха из ATS §41(1) не применяется, если работа не вредит здоровью и безопасности. Ограничение ночной работы также не применяется по PäästeTS §20(3) при том же условии и соблюдении среднего предела рабочего времени. Оценить риски здоровья по PDF невозможно.',
   }
+
+  let compensationTone: AnalysisTone = compensation.failures ? 'attention' : compensation.unknown || !hasFollowingMonth ? 'info' : 'ok'
+  let compensationValue = compensation.failures
+    ? 'Меньше 11 ч'
+    : Number.isFinite(compensation.minimumActual) ? `Минимум ${roundHours(compensation.minimumActual * 60)} ч` : 'Нужен следующий месяц'
+  let compensationExplanation = compensation.failures
+    ? 'После одной из 24-часовых оперативных смен следующая работа начинается раньше, чем закончились 11 часов компенсирующего отдыха. Для 24 часов ATS §41(4) требует немедленно дать 11 часов: это часы превышения над 13-часовой границей.'
+    : 'После 24-часовой оперативной смены ATS §41(4) требует немедленный компенсирующий отдых, равный превышению 13 часов. Для смены 24 часа это 11 часов. Проверка учитывает следующую рабочую отметку, но не знает о фактических вызовах, которых нет в PDF.'
 
   const weeklyTone: AnalysisTone = !gaps.length || !hasPreviousMonth || !hasFollowingMonth ? 'info' : weeklyRestSeen ? 'info' : 'attention'
   const weeklyValue = longestRestHours === undefined ? 'Недостаточно данных' : `Максимум ${roundHours(longestRestHours * 60)} ч`
   const weeklyExplanation = weeklyRestSeen
-    ? 'В данных виден хотя бы один достаточно длинный перерыв. При суммированном рабочем времени нужен минимум 36 часов непрерывного отдыха за семидневный период. По действующей с 13.02.2026 редакции TLS §52(4) эти 36 часов уже включают ежедневный отдых — прибавлять ещё 11 часов не нужно. Границы расчётной недели PDF не показывает.'
-    : 'При суммированном рабочем времени нужен минимум 36 часов непрерывного отдыха за семидневный период. С 13.02.2026 ежедневный отдых входит в эти 36 часов. В видимой части месяца такого промежутка не найдено, но для окончательного вывода нужны соседние месяцы и границы используемых работодателем семидневных периодов.'
+    ? 'В данных виден достаточно длинный перерыв. Для päästeametnik при суммированном учёте ATS §41(3) требует не меньше 36 часов непрерывного отдыха за семидневный период. С 13.02.2026 эти 36 часов уже включают ежедневный и еженедельный отдых. Границы используемого семидневного периода PDF не показывает.'
+    : 'Для päästeametnik при суммированном учёте ATS §41(3) требует не меньше 36 часов непрерывного отдыха за семидневный период. В видимой части месяца такого промежутка не найдено, но для окончательной проверки нужны соседние месяцы и границы семидневных периодов.'
 
   const averageTone: AnalysisTone = weeklyEquivalentHours > 48 ? 'attention' : 'info'
   const averageExplanation = weeklyEquivalentHours > 48
-    ? 'Если пересчитать только этот месяц на неделю, получается больше обычного среднего предела 48 часов. Юридически среднее считают за согласованный период, обычно до четырёх месяцев, поэтому соседние месяцы могут изменить результат. До 52 часов возможно только по отдельному добровольному соглашению и при дополнительных гарантиях.'
-    : 'При суммированном учёте обычные 40 часов могут распределяться по неделям неравномерно, а сверхурочные окончательно видны лишь в конце расчётного периода. Предел вместе со сверхурочными — в среднем 48 часов за 7 дней, обычно за период до четырёх месяцев; до 52 часов возможно только по отдельному добровольному соглашению. Здесь показан лишь эквивалент одного месяца.'
+    ? 'Эквивалент этого месяца выше среднего предела 48 часов за 7 дней из ATS §36. Это ещё не доказывает превышение: предел считают по установленному периоду, а один месяц может уравновешиваться другим. PäästeTS допускает расчётный период службы до шести месяцев, при этом ограничение ATS §36 сформулировано для среднего за период до четырёх месяцев.'
+    : 'При суммированном учёте обычные 40 часов могут распределяться по неделям неравномерно. ATS §36 ограничивает работу вместе со сверхурочной в среднем 48 часами за 7 дней за период до четырёх месяцев, а PäästeTS допускает расчётный период службы до шести месяцев. Один месяц показывает нагрузку, но не заменяет полный расчёт работодателя.'
+
+  const checks: AnalysisCheck[] = []
+  if (compensation.long.length) {
+    checks.push(operationalCheck)
+    checks.push({ id: 'shift-rest', tone: compensationTone, title: 'Отдых после оперативной смены', value: compensationValue, explanation: compensationExplanation })
+  }
+  checks.push(
+    { id: 'weekly-rest', tone: weeklyTone, title: 'Еженедельный отдых', value: weeklyValue, explanation: weeklyExplanation },
+    { id: 'average-time', tone: averageTone, title: 'Средняя нагрузка', value: `${weeklyEquivalentHours} ч / неделю`, explanation: averageExplanation },
+  )
+  if (homeDutyHours) checks.push({
+    id: 'home-duty', tone: homeDutyHours > 155 ? 'attention' : 'ok', title: 'Домашнее дежурство V', value: `${homeDutyHours} из 155 ч`,
+    explanation: 'Для päästeteenistuja PäästeTS §20(6) прямо считает valveaeg частью отдыха и ограничивает его 155 часами в месяц. Поэтому V не уменьшает рассчитанный свободный промежуток. Но время фактического вызова уже является работой; PDF его не содержит, и приложение не может прибавить его автоматически.',
+  })
+  if (shortenedShifts.length) checks.push({
+    id: 'shortened-days', tone: 'info', title: 'Работа перед праздником', value: `${shortenedShifts.length} рабочий день`,
+    explanation: 'ATS §42 сокращает на 3 часа рабочий день непосредственно перед Новым годом, Днём независимости, Днём победы и Рождеством. PDF показывает запланированные часы, но не основание и способ учёта оставшихся часов.',
+  })
 
   return {
     month,
@@ -189,39 +199,14 @@ export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: 
     nightHours,
     homeDutyHours,
     tentativeHours,
-    shiftCount: onsiteDrafts.length,
-    longShiftCount: compensation.long.length,
+    operationalShiftCount: compensation.long.length,
+    workdayCount: new Set(onsiteDrafts.filter(draft => draft.hours <= 13).map(draft => draft.date)).size,
     leaveDays,
     minimumRestHours,
     longestRestHours,
     weeklyEquivalentHours,
     hasFollowingMonth,
     hasPreviousMonth,
-    checks: [
-      longShiftCheck,
-      { id: 'daily-rest', tone: compensationTone, title: 'Отдых между сменами', value: compensationValue, explanation: compensationExplanation },
-      { id: 'weekly-rest', tone: weeklyTone, title: 'Еженедельный отдых', value: weeklyValue, explanation: weeklyExplanation },
-      { id: 'average-time', tone: averageTone, title: 'Средняя нагрузка', value: `${weeklyEquivalentHours} ч / неделю`, explanation: averageExplanation },
-      {
-        id: 'night-work', tone: 'info', title: 'Ночная работа', value: `${nightHours} ч`,
-        explanation: 'По действующему Töölepingu seadus ночное время — с 22:00 до 06:00. Период до 10:00 законом целиком ночным не считается. Ночная работа обычно оплачивается в размере 1,25, если доплата уже не включена в зарплату. Для ночного работника действует также среднее ограничение 8 часов за 24 часа в семидневном периоде, но закон допускает специальные исключения для непрерывных служб. Статус ночного работника, оплату, оценку рисков и исключение один PDF подтвердить не может.',
-      },
-      {
-        id: 'home-duty', tone: 'info', title: 'Домашнее дежурство V', value: `${homeDutyHours} ч отдельно`,
-        explanation: homeDutyHours
-          ? 'Koduvalve — время готовности приступить к работе, а не автоматически отработанные часы. Фактический вызов считается рабочим временем. Обычное домашнее дежурство нельзя одновременно считать обязательным ежедневным или еженедельным отдыхом, поэтому приложение учитывает V при поиске свободных промежутков, но не прибавляет все V-часы к отработанным. Обычно за valveaeg положено не меньше 1/10 согласованной зарплаты, если специальный закон не устанавливает иное; оплату PDF не показывает.'
-          : 'В этом месяце кодов V нет. Если они появятся, приложение покажет koduvalve отдельно от фактически отработанных часов и учтёт его при анализе отдыха.',
-      },
-      {
-        id: 'shortened-days', tone: shortenedShifts.length ? 'info' : 'ok', title: 'Дни перед праздниками', value: shortenedShifts.length ? `${shortenedShifts.length} смен` : 'Особых дат нет',
-        explanation: shortenedShifts.length
-          ? 'Рабочий день 23 февраля, 22 июня, 23 декабря и 31 декабря работодатель должен сократить на 3 часа. Если непрерывная работа требует полной смены, оставшиеся часы требуют отдельного правового основания и учёта. PDF показывает план, но не соглашение и компенсацию.'
-          : 'В этом месяце нет смен, начинающихся 23 февраля, 22 июня, 23 декабря или 31 декабря — дат, когда рабочий день сокращается на 3 часа.',
-      },
-      {
-        id: 'breaks', tone: 'info', title: 'Перерывы внутри смены', value: 'PDF не показывает',
-        explanation: 'При работе дольше 6 часов обычно положен перерыв не менее 30 минут. По одному коду 8, 12 или 24 невозможно понять, когда был перерыв и входит ли он в рабочее время, поэтому приложение это не оценивает.',
-      },
-    ],
+    checks,
   }
 }

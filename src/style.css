@@ -194,6 +194,7 @@ header { position:relative; z-index:4; border-bottom:1px solid #e5dce9aa; paddin
 .day-hours { background:#62bcb0; }
 .night-hours { background:#9ca8ff; }
 .analysis-tentative { margin:9px 2px 0; border-radius:12px; padding:9px 11px; background:#fff0cf; color:#63410d; font-size:11px; }
+.analysis-context { margin:10px 2px 0; color:#5b505f; font-size:11px; line-height:1.45; }
 .analysis-metrics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin-top:10px; }
 .analysis-metrics>div { min-width:0; border:1px solid #e3dae7; border-radius:15px; padding:11px 9px; background:#fff; }
 .analysis-metrics b,.analysis-metrics span { display:block; }
@@ -373,7 +374,7 @@ dialog>button,.calendar-button { margin-top:16px; border-radius:12px; padding:12
   .tabs button { color:#e6dbe8; }
   .tabs button.active { color:#e8a7ff; }
   .analysis-metrics b { color:#e9b2fa; }
-  .analysis-mode,.analysis-metrics span,.law-intro,.analysis-rule summary small,.analysis-rule>p,.analysis-empty p { color:#ded1e1; }
+  .analysis-mode,.analysis-context,.analysis-metrics span,.law-intro,.analysis-rule summary small,.analysis-rule>p,.analysis-empty p { color:#ded1e1; }
   .analysis-boundary { border-color:#9a742e; background:#49391f; color:#fff0cf; }
   .analysis-verdict { border-color:#3c7968; background:#203f38; color:#d8fff3; }
   .analysis-verdict.attention { border-color:#9a742e; background:#49391f; color:#fff0cf; }

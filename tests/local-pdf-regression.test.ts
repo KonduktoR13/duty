@@ -42,7 +42,7 @@ describe.skipIf(!local)('reference Delta PDFs', () => {
     const parsed = await parseSource(august)
     const d12 = parsed.candidates.find(candidate => candidate.number === 'D12')!
     const month: MonthRecord = { id: parsed.month, fileName: 'August 2026_kinnitamata.pdf', importedAt: 1, hash: 'local', shifts: d12.shifts, marks: d12.marks, candidates: parsed.candidates, deltaNumber: 'D12', status: 'local' }
-    expect(analyzeMonth([month], '2026-08', 'D12')).toMatchObject({ workHours: 192, dayHours: 128, nightHours: 64, shiftCount: 8, longShiftCount: 8 })
+    expect(analyzeMonth([month], '2026-08', 'D12')).toMatchObject({ workHours: 192, dayHours: 128, nightHours: 64, operationalShiftCount: 8, workdayCount: 0 })
   })
 
   it('also reads the rotated July table', async () => {

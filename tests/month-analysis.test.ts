@@ -21,8 +21,7 @@ describe('monthly roster analysis', () => {
       ]),
       record('2026-09', []),
     ], '2026-08', 'D12')
-    expect(result).toMatchObject({ workHours: 32, dayHours: 24, nightHours: 8, shiftCount: 2 })
-    expect(result.checks.find(check => check.id === 'night-work')?.explanation).toContain('22:00 до 06:00')
+    expect(result).toMatchObject({ workHours: 32, dayHours: 24, nightHours: 8, operationalShiftCount: 1, workdayCount: 1 })
   })
 
   it('keeps home duty and tentative hours separate from confirmed on-site work', () => {
@@ -32,10 +31,11 @@ describe('monthly roster analysis', () => {
       { date: '2026-08-04', kind: 'home', raw: 'V8', hours: 8 },
       { date: '2026-08-05', kind: 'tentative', raw: '#12', hours: 12 },
     ])], '2026-08', 'D12')
-    expect(result).toMatchObject({ workHours: 12, homeDutyHours: 12, tentativeHours: 12, shiftCount: 1 })
+    expect(result).toMatchObject({ workHours: 12, homeDutyHours: 12, tentativeHours: 12, operationalShiftCount: 0, workdayCount: 1 })
+    expect(result.checks.find(check => check.id === 'home-duty')).toMatchObject({ tone: 'ok', value: '12 из 155 ч' })
   })
 
-  it('requires 22 hours of rest after a 24-hour shift and detects a short gap', () => {
+  it('requires 11 compensatory hours after a 24-hour rescue-service shift and detects a short gap', () => {
     const result = analyzeMonth([
       record('2026-07', []),
       record('2026-08', [
@@ -44,15 +44,28 @@ describe('monthly roster analysis', () => {
       ]),
       record('2026-09', []),
     ], '2026-08', 'D12')
-    expect(result.longShiftCount).toBe(1)
-    expect(result.checks.find(check => check.id === 'daily-rest')).toMatchObject({ tone: 'attention', value: 'Нужно проверить' })
+    expect(result.operationalShiftCount).toBe(1)
+    expect(result.checks.find(check => check.id === 'shift-rest')).toMatchObject({ tone: 'attention', value: 'Меньше 11 ч' })
+  })
+
+  it('does not treat scheduled rescue-service V standby as interrupting compensatory rest', () => {
+    const result = analyzeMonth([
+      record('2026-07', []),
+      record('2026-08', [
+        { date: '2026-08-03', kind: 'hours', raw: '24', hours: 24 },
+        { date: '2026-08-04', kind: 'home', raw: 'V8', hours: 8 },
+        { date: '2026-08-05', kind: 'hours', raw: '8', hours: 8 },
+      ]),
+      record('2026-09', []),
+    ], '2026-08', 'D12')
+    expect(result.checks.find(check => check.id === 'shift-rest')).toMatchObject({ tone: 'ok', value: 'Минимум 24 ч' })
   })
 
   it('does not claim a complete legal assessment without adjacent months', () => {
     const result = analyzeMonth([record('2026-08', [{ date: '2026-08-31', kind: 'hours', raw: '24', hours: 24 }])], '2026-08', 'D12')
     expect(result.hasPreviousMonth).toBe(false)
     expect(result.hasFollowingMonth).toBe(false)
-    expect(result.checks.find(check => check.id === 'daily-rest')?.tone).toBe('info')
+    expect(result.checks.find(check => check.id === 'shift-rest')?.tone).toBe('info')
   })
 
   it('uses the current 36-hour weekly-rest threshold for summarized working time', () => {
@@ -67,6 +80,16 @@ describe('monthly roster analysis', () => {
     const weekly = result.checks.find(check => check.id === 'weekly-rest')
     expect(weekly?.value).toBe('Максимум 40 ч')
     expect(weekly?.explanation).toContain('13.02.2026')
-    expect(weekly?.explanation).toContain('прибавлять ещё 11 часов не нужно')
+    expect(weekly?.explanation).toContain('ежедневный и еженедельный отдых')
+  })
+
+  it('treats rescue-service standby as rest and flags the 155-hour monthly limit', () => {
+    const result = analyzeMonth([record('2026-08', [
+      { date: '2026-08-01', kind: 'hours', raw: '8', hours: 8 },
+      { date: '2026-08-02', kind: 'home', raw: 'V156', hours: 156 },
+      { date: '2026-08-03', kind: 'hours', raw: '8', hours: 8 },
+    ])], '2026-08', 'D12')
+    expect(result.checks.find(check => check.id === 'home-duty')).toMatchObject({ tone: 'attention', value: '156 из 155 ч' })
+    expect(result.minimumRestHours).toBe(40)
   })
 })
