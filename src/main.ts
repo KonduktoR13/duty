@@ -6,6 +6,7 @@ import { applyCalendarSync, auditCalendarSync, buildCalendarDrafts, calendarSync
 import { clearGoogleAccessToken, deterministicGoogleEventId, discoverDutyAccounts, getGoogleAccountEmail, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess, setGoogleLoginHint } from './google-calendar'
 import { createGoogleAccountProfileId, googleEmailKey, resolveGoogleEmailProfile } from './google-account'
 import { humanMonth, timeLabel } from './schedule'
+import { analyzeMonth, type AnalysisCheck } from './month-analysis'
 import type { CalendarMonthSync, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
 import './style.css'
 import './interaction.css'
@@ -26,7 +27,8 @@ let months: MonthRecord[] = []
 let selected = ''
 let currentDelta = ''
 let selectedDate: string | null = null
-let section: 'calendar' | 'documents' = 'calendar'
+type AppSection = 'calendar' | 'analysis' | 'documents'
+let section: AppSection = 'calendar'
 let pending: { file: File; parsed: ParsedSchedule } | null = null
 let applyUpdate: ((reloadPage?: boolean) => Promise<void>) | undefined
 let monthTransitioning = false
@@ -37,7 +39,7 @@ let calendarSyncs: CalendarMonthSync[] = []
 let googleSettings: GoogleIntegrationSettings = { enabled: false }
 let highlightSyncOffer = false
 let legendExpanded = false
-let lastRenderedSection: 'calendar' | 'documents' = section
+let lastRenderedSection: AppSection = section
 
 const localDateId = (value = new Date()) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-')
 const todayId = () => localDateId()
@@ -142,15 +144,23 @@ function render() {
   const current = months.find(month => month.id === selected) || blankMonth(selected)
   const mainContent = section === 'documents'
     ? documentsView()
-    : !months.length
-      ? welcome()
-      : hero(upcomingDay()) + legacyNotice() + monthView(current)
+    : section === 'analysis'
+      ? analysisView(current)
+      : !months.length
+        ? welcome()
+        : hero(upcomingDay()) + legacyNotice() + monthView(current)
+  const sectionCopy: Record<AppSection, { title: string; subtitle: string }> = {
+    calendar: { title: 'Мои смены', subtitle: 'Только на этом устройстве' },
+    analysis: { title: 'Анализ месяца', subtitle: 'Часы, нагрузка и отдых' },
+    documents: { title: 'Графики', subtitle: 'Источники данных календаря' },
+  }
+  const copy = sectionCopy[section]
   app.innerHTML = '<div class="app-shell"><header><div class="header-inner"><div class="brand"><span>▣</span><div><h1>' +
-    (section === 'calendar' ? 'Мои смены' : 'Графики') + '</h1><small>' +
-    (section === 'calendar' ? 'Только на этом устройстве' : 'Источники данных календаря') +
+    copy.title + '</h1><small>' + copy.subtitle +
     '</small></div></div><button class="icon" id="settings" aria-label="Настройки">⚙</button></div></header><main class="app-content">' +
     mainContent + '</main><nav class="tabs" aria-label="Разделы"><button data-section="calendar" class="' +
-    (section === 'calendar' ? 'active' : '') + '">▣<span>Календарь</span></button><button data-section="documents" class="' +
+    (section === 'calendar' ? 'active' : '') + '">▣<span>Календарь</span></button><button data-section="analysis" class="' +
+    (section === 'analysis' ? 'active' : '') + '">◔<span>Анализ</span></button><button data-section="documents" class="' +
     (section === 'documents' ? 'active' : '') + '">▤<span>Графики</span></button></nav></div><input id="file" type="file" accept="application/pdf,.pdf" hidden><dialog id="dialog"></dialog>'
   bind()
   requestAnimationFrame(() => {
@@ -217,6 +227,20 @@ function foreignMarkDescription(mark: DayMark, marks: DayMark[], deltaNumber: st
   return `${type} · код ${mark.raw} · ${start}–${end}${nextDay ? ' следующего дня' : ''}`
 }
 
+function foreignEntriesHtml(entries: ForeignDayEntry[], ownDay: boolean) {
+  if (!entries.length) return ownDay
+    ? '<section class="coworkers-block empty"><b>Других смен нет</b><span>В исходном графике на это время другие D-номера не найдены.</span></section>'
+    : ''
+  const heading = ownDay
+    ? 'Другие на работе · ' + entries.length
+    : entries.length > 1 ? 'Другие D-номера · ' + entries.length : 'Другой D-номер · ' + esc(entries[0].deltaNumber)
+  const note = ownDay
+    ? '<span class="not-yours">Не ваши смены</span>'
+    : '<span class="not-yours">У вас смены нет · показаны другие сотрудники</span>'
+  const rows = entries.map(entry => '<section class="foreign-entry"><strong>' + esc(entry.deltaNumber) + '</strong><div class="detail-lines">' + entry.marks.map(mark => '<div class="detail-line ' + mark.kind + '"><i></i><div><b>' + esc(displayCode(mark)) + '</b><span>' + esc(foreignMarkDescription(mark, entry.marks, entry.deltaNumber)) + '</span></div></div>').join('') + '</div></section>').join('')
+  return '<section class="coworkers-block' + (ownDay ? ' alongside-own' : '') + '"><div class="coworkers-heading"><b class="foreign-title">' + heading + '</b>' + note + '</div><div class="foreign-entries">' + rows + '</div></section>'
+}
+
 function dayTone(marks: DayMark[]) {
   const has24 = marks.some(mark => mark.kind === 'hours' && mark.hours === 24)
   const hasBoundary = marks.some(isMonthBoundaryPart)
@@ -279,7 +303,7 @@ function selectedDetails(marksByDate: Map<string, DayMark[]>, month: MonthRecord
   if (!marks.length) {
     const entries = foreignByDate.get(selectedDate) || []
     const content = entries.length
-      ? '<b class="foreign-title">' + (entries.length > 1 ? 'Другие D-номера · ' + entries.length : 'Другой D-номер · ' + esc(entries[0].deltaNumber)) + '</b><div class="foreign-entries">' + entries.map(entry => '<section class="foreign-entry"><strong>' + esc(entry.deltaNumber) + '</strong><div class="detail-lines">' + entry.marks.map(mark => '<div class="detail-line ' + mark.kind + '"><i></i><div><b>' + esc(displayCode(mark)) + '</b><span>' + esc(foreignMarkDescription(mark, entry.marks, entry.deltaNumber)) + '</span></div></div>').join('') + '</div></section>').join('') + '</div>'
+      ? foreignEntriesHtml(entries, false)
       : '<b>Нет смен</b><span class="empty-detail">В исходном графике на этот день рабочих отметок нет.</span>'
     return '<section class="shift-details ' + (entries.length ? 'foreign-details' : 'empty-details') + '" id="shift-details" aria-label="Информация за ' + esc(date(selectedDate)) + '"><i class="detail-handle" aria-hidden="true"></i><div class="detail-icon">' + (entries.length ? 'D' : '—') + '</div><div class="detail-content"><small>' + date(selectedDate) + '</small>' + content + '</div><button class="detail-close" id="detail-close" aria-label="Закрыть информацию о дне">×</button></section>'
   }
@@ -290,7 +314,8 @@ function selectedDetails(marksByDate: Map<string, DayMark[]>, month: MonthRecord
   const onlyTentative = marks.every(mark => mark.kind === 'tentative')
   const icon = onlyLeave ? '☼' : onlyHome ? '⌂' : onlyTentative ? '?' : onlyOther ? '⋯' : '◷'
   const lines = marks.map(mark => '<div class="detail-line ' + mark.kind + '"><i></i><div><b>' + esc(displayCode(mark)) + '</b><span>' + esc(markDescription(mark)) + '</span></div></div>').join('')
-  return '<section class="shift-details" id="shift-details" aria-label="Информация за ' + esc(date(selectedDate)) + '"><i class="detail-handle" aria-hidden="true"></i><div class="detail-icon">' + icon + '</div><div class="detail-content"><b>' + date(selectedDate) + '</b><div class="detail-lines">' + lines + '</div></div><button class="detail-close" id="detail-close" aria-label="Закрыть информацию о дне">×</button></section>'
+  const entries = foreignByDate.get(selectedDate) || []
+  return '<section class="shift-details" id="shift-details" aria-label="Информация за ' + esc(date(selectedDate)) + '"><i class="detail-handle" aria-hidden="true"></i><div class="detail-icon">' + icon + '</div><div class="detail-content"><b>' + date(selectedDate) + '</b><span class="own-shift-label">Ваша смена</span><div class="detail-lines">' + lines + '</div>' + foreignEntriesHtml(entries, true) + '</div><button class="detail-close" id="detail-close" aria-label="Закрыть информацию о дне">×</button></section>'
 }
 
 function monthView(month: MonthRecord) {
@@ -380,6 +405,35 @@ function documentsView() {
   return '<section class="documents-intro"><p>Оригинальные PDF и графики хранятся только на этом устройстве. Нажмите график, чтобы открыть его.</p><button class="primary" id="import">Импортировать PDF</button></section><h2 class="list-title">Загруженные графики</h2><section class="documents">' + rows + '</section><p class="documents-hint">Повторный импорт заменяет только соответствующий месяц и не создаёт дублей.</p>'
 }
 
+function formatAnalysisHours(value: number) {
+  return String(Math.round(value * 10) / 10).replace('.', ',') + ' ч'
+}
+
+function analysisRule(check: AnalysisCheck) {
+  const icon = check.tone === 'ok' ? '✓' : check.tone === 'attention' ? '!' : 'i'
+  return '<details class="analysis-rule ' + check.tone + '"><summary><i>' + icon + '</i><span><b>' + esc(check.title) + '</b><small>' + esc(check.value) + '</small></span><em>⌄</em></summary><p>' + esc(check.explanation) + '</p></details>'
+}
+
+function analysisView(month: MonthRecord) {
+  const navigation = '<nav class="months analysis-months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav>'
+  const source = months.find(item => item.id === month.id)
+  if (!months.length) return '<section class="analysis-empty"><div>◔</div><h2>Сначала добавьте график</h2><p>Анализ выполняется только на устройстве по данным импортированного PDF.</p><button class="primary" id="import">Импортировать PDF</button></section>'
+  if (!source || !candidateForMonth(source, currentDelta)) return navigation + '<section class="analysis-empty compact"><div>—</div><h2>Нет данных для ' + esc(currentDelta) + '</h2><p>Для ' + humanMonth(month.id) + ' график не загружен или в PDF нет выбранного D-номера.</p></section>'
+  const analysis = analyzeMonth(months, month.id, currentDelta)
+  const totalParts = analysis.homeDutyHours ? '<span>+ ' + formatAnalysisHours(analysis.homeDutyHours) + ' koduvalve отдельно</span>' : '<span>Подтверждённые смены на месте</span>'
+  const tentative = analysis.tentativeHours ? '<p class="analysis-tentative">Возможные выходы # не включены: ' + formatAnalysisHours(analysis.tentativeHours) + '</p>' : ''
+  const leave = analysis.leaveDays ? '<div><b>' + analysis.leaveDays + '</b><span>дней с отпуском</span></div>' : ''
+  const boundary = (!analysis.hasPreviousMonth || !analysis.hasFollowingMonth) ? '<aside class="analysis-boundary"><b>Границы месяца видны не полностью</b><span>Для точной проверки отдыха загрузите также соседние месяцы.</span></aside>' : ''
+  const attention = analysis.checks.some(check => check.tone === 'attention')
+  const hasLongShifts = analysis.longShiftCount > 0
+  const verdict = attention
+    ? '<section class="analysis-verdict attention"><i>!</i><div><b>Есть пункты, которые нужно проверить</b><span>Это сигнал посмотреть детали, а не утверждение о нарушении.</span></div></section>'
+    : hasLongShifts
+      ? '<section class="analysis-verdict info"><i>i</i><div><b>Интервалы отдыха выглядят достаточными</b><span>Законность самих 24-часовых смен зависит от условий, которых нет в PDF.</span></div></section>'
+      : '<section class="analysis-verdict"><i>✓</i><div><b>Явных проблем в доступных данных не найдено</b><span>Часть требований нельзя доказать по одному PDF.</span></div></section>'
+  return navigation + '<div class="analysis-mode"><b>Summeeritud tööajaarvestus</b><span>Суммированный учёт рабочего времени</span></div><section class="analysis-summary"><small>' + esc(currentDelta) + ' · работа на месте</small><strong>' + formatAnalysisHours(analysis.workHours) + '</strong>' + totalParts + '<div class="hours-bar" aria-label="Дневные ' + formatAnalysisHours(analysis.dayHours) + ', ночные ' + formatAnalysisHours(analysis.nightHours) + '"><i style="--night:' + (analysis.workHours ? analysis.nightHours / analysis.workHours * 100 : 0) + '%"></i></div><div class="hours-key"><span><i class="day-hours"></i>Дневные 06–22 <b>' + formatAnalysisHours(analysis.dayHours) + '</b></span><span><i class="night-hours"></i>Ночные 22–06 <b>' + formatAnalysisHours(analysis.nightHours) + '</b></span></div></section>' + tentative + '<section class="analysis-metrics"><div><b>' + analysis.shiftCount + '</b><span>рабочих смен</span></div><div><b>' + analysis.longShiftCount + '</b><span>смен по 24 ч</span></div><div><b>' + formatAnalysisHours(analysis.homeDutyHours) + '</b><span>koduvalve отдельно</span></div>' + leave + '</section>' + boundary + verdict + '<section class="law-analysis"><header><div><small>Предварительная оценка · суммированный учёт</small><h2>Работа и отдых по закону</h2></div><span>TLS</span></header><p class="law-intro">Откройте пункт, чтобы простым языком увидеть норму, расчёт приложения и ограничения проверки.</p>' + analysis.checks.map(analysisRule).join('') + '<aside class="legal-disclaimer"><b>Важно</b><span>Это справочная автоматическая оценка, не юридическое заключение. PDF не показывает фактические вызовы во время V, перерывы, договор, коллективное соглашение, оценку рисков и весь расчётный период.</span><a href="https://www.riigiteataja.ee/akt/TLS" target="_blank" rel="noopener">Töölepingu seadus · действующая редакция ↗</a><small>Правила сверены с редакцией Riigi Teataja, действующей с 13.02.2026.</small></aside></section>'
+}
+
 function date(value: string) {
   return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' }).format(new Date(value + 'T12:00:00'))
 }
@@ -411,7 +465,7 @@ function bind() {
       if (overflow > 0) content.scrollTo({ top: content.scrollTop + overflow, behavior: 'smooth' })
     }, 330)
   })
-  document.querySelectorAll<HTMLButtonElement>('[data-section]').forEach(button => button.onclick = () => { section = button.dataset.section as 'calendar' | 'documents'; selectedDate = null; render() })
+  document.querySelectorAll<HTMLButtonElement>('[data-section]').forEach(button => button.onclick = () => { section = button.dataset.section as AppSection; selectedDate = null; render() })
   document.querySelectorAll<HTMLElement>('[data-open-pdf]').forEach(item => {
     const open = () => {
     const popup = window.open('', '_blank')

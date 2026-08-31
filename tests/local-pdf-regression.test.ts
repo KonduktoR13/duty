@@ -8,6 +8,8 @@ import { describe, expect, it } from 'vitest'
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
 import { parseGlyphs } from '../src/parser'
 import { normalizeCrossMonth } from '../src/schedule'
+import { analyzeMonth } from '../src/month-analysis'
+import type { MonthRecord } from '../src/types'
 
 const pdf = (name: string) => new URL(`../../${name}`, import.meta.url)
 const april = pdf('Aprill 2026_kinnitatud.pdf')
@@ -34,6 +36,13 @@ describe.skipIf(!local)('reference Delta PDFs', () => {
     const d12 = parsed.candidates.find(candidate => candidate.number === 'D12')!
     expect(d12.shifts.map(shift => shift.date)).toEqual(['2026-08-03', '2026-08-07', '2026-08-09', '2026-08-12', '2026-08-17', '2026-08-21', '2026-08-26', '2026-08-30'])
     expect(d12.shifts.every(shift => shift.code === '24')).toBe(true)
+  })
+
+  it('calculates August D12 daytime and legal 22:00–06:00 night hours', async () => {
+    const parsed = await parseSource(august)
+    const d12 = parsed.candidates.find(candidate => candidate.number === 'D12')!
+    const month: MonthRecord = { id: parsed.month, fileName: 'August 2026_kinnitamata.pdf', importedAt: 1, hash: 'local', shifts: d12.shifts, marks: d12.marks, candidates: parsed.candidates, deltaNumber: 'D12', status: 'local' }
+    expect(analyzeMonth([month], '2026-08', 'D12')).toMatchObject({ workHours: 192, dayHours: 128, nightHours: 64, shiftCount: 8, longShiftCount: 8 })
   })
 
   it('also reads the rotated July table', async () => {

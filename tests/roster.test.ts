@@ -32,4 +32,12 @@ describe('D-number roster selection', () => {
     ])
     expect(foreignEntriesForDate([month], '2026-08', 'D12', '2026-08-05')).toEqual([])
   })
+
+  it('also returns colleagues when the selected D-number works that day', () => {
+    const sharedDay: MonthRecord = {
+      ...month,
+      candidates: [candidate('D12', '2026-08-03', 24), candidate('D40', '2026-08-03', 8), candidate('D14', '2026-08-03', 24)],
+    }
+    expect(foreignEntriesForDate([sharedDay], '2026-08', 'D12', '2026-08-03').map(entry => entry.deltaNumber)).toEqual(['D40', 'D14'])
+  })
 })
