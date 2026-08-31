@@ -213,6 +213,12 @@ header { position:relative; z-index:4; border-bottom:1px solid #e5dce9aa; paddin
 .analysis-verdict b,.analysis-verdict span { display:block; }
 .analysis-verdict b { font-size:12px; }
 .analysis-verdict span { margin-top:2px; font-size:10px; line-height:1.35; }
+.analysis-issue-links { display:grid; gap:5px; margin:9px 0 0; padding:0; list-style:none; }
+.analysis-jump { display:grid; width:100%; min-height:38px; grid-template-columns:minmax(0,1fr) auto auto; gap:7px; align-items:center; border:1px solid #dbb86f; border-radius:10px; padding:7px 9px; background:#fffaf0; color:#5b3907; text-align:left; }
+.analysis-jump span,.analysis-jump b { margin:0; font-size:10px; }
+.analysis-jump span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.analysis-jump b { white-space:nowrap; }
+.analysis-jump i { font-style:normal; font-weight:900; }
 .law-analysis { margin-top:10px; border:1px solid #e3dae7; border-radius:20px; padding:15px; background:#fff; box-shadow:0 3px 10px #24102f0d; }
 .law-analysis>header { display:flex; gap:12px; align-items:center; justify-content:space-between; }
 .law-analysis>header small { color:#6c5e70; font-size:10px; text-transform:uppercase; }
@@ -231,6 +237,10 @@ header { position:relative; z-index:4; border-bottom:1px solid #e5dce9aa; paddin
 .analysis-rule summary>em { font-size:16px; font-style:normal; transition:transform 180ms ease; }
 .analysis-rule[open] summary>em { transform:rotate(180deg); }
 .analysis-rule>p { margin:0 0 13px 36px; color:#4e4552; font-size:12px; line-height:1.5; }
+.analysis-findings { display:grid; gap:6px; margin:0 0 9px 36px; padding:0; list-style:none; }
+.analysis-findings li { border-left:3px solid #c18420; border-radius:0 8px 8px 0; padding:7px 9px; background:#fff5df; color:#5c3b0b; font-size:11px; font-weight:700; line-height:1.45; }
+.analysis-rule.analysis-focus { animation:analysis-focus 1.1s ease; }
+@keyframes analysis-focus { 0%,100% { box-shadow:none; } 35% { box-shadow:0 0 0 4px #d79d354d; } }
 .legal-disclaimer { margin-top:12px; border-radius:14px; padding:12px; background:#f2edf4; color:#4f4553; }
 .legal-disclaimer b,.legal-disclaimer span,.legal-disclaimer a,.legal-disclaimer small { display:block; }
 .legal-disclaimer b { font-size:12px; }
@@ -380,6 +390,8 @@ dialog>button,.calendar-button { margin-top:16px; border-radius:12px; padding:12
   .analysis-verdict.attention { border-color:#9a742e; background:#49391f; color:#fff0cf; }
   .analysis-verdict.info { border-color:#605265; background:#3a303e; color:#eadfec; }
   .analysis-rule { border-color:#4c4051; }
+  .analysis-jump { border-color:#9a742e; background:#382c1a; color:#fff0cf; }
+  .analysis-findings li { border-color:#d59a37; background:#49391f; color:#fff0cf; }
   .legal-disclaimer { background:#3a303e; color:#e4d8e7; }
   .legal-disclaimer a { color:#e5a5fa; }
   .hero { box-shadow:none; }

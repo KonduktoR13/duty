@@ -9,6 +9,7 @@ export type AnalysisCheck = {
   title: string
   value: string
   explanation: string
+  findings?: string[]
 }
 
 export type MonthAnalysis = {
@@ -44,6 +45,15 @@ function wallMinutes(value: string) {
 
 function roundHours(minutes: number) {
   return Math.round(minutes / 6) / 10
+}
+
+function hourText(hours: number) {
+  return `${String(roundHours(hours * 60)).replace('.', ',')} ч`
+}
+
+function wallLabel(minutes: number) {
+  const value = new Date(minutes * 60000)
+  return `${String(value.getUTCDate()).padStart(2, '0')}.${String(value.getUTCMonth() + 1).padStart(2, '0')} ${String(value.getUTCHours()).padStart(2, '0')}:${String(value.getUTCMinutes()).padStart(2, '0')}`
 }
 
 function nightMinutes(start: number, end: number) {
@@ -103,7 +113,7 @@ function restGaps(values: Array<{ start: number; end: number }>, month: string) 
 
 function compensationCheck(onsite: Interval[], allOccupied: Interval[], month: string) {
   const long = onsite.filter(interval => interval.draft.date.startsWith(month + '-') && interval.draft.hours > 13)
-  let failures = 0
+  const failures: Array<{ end: number; next: number; actual: number; required: number }> = []
   let unknown = 0
   let minimumActual = Number.POSITIVE_INFINITY
   for (const shift of long) {
@@ -115,7 +125,7 @@ function compensationCheck(onsite: Interval[], allOccupied: Interval[], month: s
     // rest equal to the part of a duty period that exceeded 13 hours.
     const required = shift.draft.hours - 13
     minimumActual = Math.min(minimumActual, actual)
-    if (actual < required) failures++
+    if (actual < required) failures.push({ end: shift.end, next: next.start, actual, required })
   }
   return { long, failures, unknown, minimumActual }
 }
@@ -154,16 +164,18 @@ export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: 
     explanation: 'Для päästeametnik 24-часовая оперативная смена предусмотрена специальным режимом PäästeTS §20(8): обычное ограничение ежедневного отдыха из ATS §41(1) не применяется, если работа не вредит здоровью и безопасности. Ограничение ночной работы также не применяется по PäästeTS §20(3) при том же условии и соблюдении среднего предела рабочего времени. Оценить риски здоровья по PDF невозможно.',
   }
 
-  let compensationTone: AnalysisTone = compensation.failures ? 'attention' : compensation.unknown || !hasFollowingMonth ? 'info' : 'ok'
-  let compensationValue = compensation.failures
+  const compensationTone: AnalysisTone = compensation.failures.length ? 'attention' : compensation.unknown || !hasFollowingMonth ? 'info' : 'ok'
+  const compensationValue = compensation.failures.length
     ? 'Меньше 11 ч'
     : Number.isFinite(compensation.minimumActual) ? `Минимум ${roundHours(compensation.minimumActual * 60)} ч` : 'Нужен следующий месяц'
-  let compensationExplanation = compensation.failures
+  const compensationExplanation = compensation.failures.length
     ? 'После одной из 24-часовых оперативных смен следующая работа начинается раньше, чем закончились 11 часов компенсирующего отдыха. Для 24 часов ATS §41(4) требует немедленно дать 11 часов: это часы превышения над 13-часовой границей.'
     : 'После 24-часовой оперативной смены ATS §41(4) требует немедленный компенсирующий отдых, равный превышению 13 часов. Для смены 24 часа это 11 часов. Проверка учитывает следующую рабочую отметку, но не знает о фактических вызовах, которых нет в PDF.'
+  const compensationFindings = compensation.failures.map(item => `Смена закончилась ${wallLabel(item.end)}, следующая работа — ${wallLabel(item.next)}. Отдых ${hourText(item.actual)}, требуется ${hourText(item.required)}.`)
 
   const weeklyTone: AnalysisTone = !gaps.length || !hasPreviousMonth || !hasFollowingMonth ? 'info' : weeklyRestSeen ? 'info' : 'attention'
   const weeklyValue = longestRestHours === undefined ? 'Недостаточно данных' : `Максимум ${roundHours(longestRestHours * 60)} ч`
+  const longestGap = gaps.reduce<(typeof gaps)[number] | undefined>((best, gap) => !best || gap.hours > best.hours ? gap : best, undefined)
   const weeklyExplanation = weeklyRestSeen
     ? 'В данных виден достаточно длинный перерыв. Для päästeametnik при суммированном учёте ATS §41(3) требует не меньше 36 часов непрерывного отдыха за семидневный период. С 13.02.2026 эти 36 часов уже включают ежедневный и еженедельный отдых. Границы используемого семидневного периода PDF не показывает.'
     : 'Для päästeametnik при суммированном учёте ATS §41(3) требует не меньше 36 часов непрерывного отдыха за семидневный период. В видимой части месяца такого промежутка не найдено, но для окончательной проверки нужны соседние месяцы и границы семидневных периодов.'
@@ -176,15 +188,22 @@ export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: 
   const checks: AnalysisCheck[] = []
   if (compensation.long.length) {
     checks.push(operationalCheck)
-    checks.push({ id: 'shift-rest', tone: compensationTone, title: 'Отдых после оперативной смены', value: compensationValue, explanation: compensationExplanation })
+    checks.push({ id: 'shift-rest', tone: compensationTone, title: 'Отдых после оперативной смены', value: compensationValue, explanation: compensationExplanation, findings: compensationFindings })
   }
   checks.push(
-    { id: 'weekly-rest', tone: weeklyTone, title: 'Еженедельный отдых', value: weeklyValue, explanation: weeklyExplanation },
-    { id: 'average-time', tone: averageTone, title: 'Средняя нагрузка', value: `${weeklyEquivalentHours} ч / неделю`, explanation: averageExplanation },
+    {
+      id: 'weekly-rest', tone: weeklyTone, title: 'Еженедельный отдых', value: weeklyValue, explanation: weeklyExplanation,
+      findings: weeklyTone === 'attention' && longestGap ? [`Самый длинный видимый перерыв: ${wallLabel(longestGap.start)}–${wallLabel(longestGap.end)}, всего ${hourText(longestGap.hours)}. Требуется не меньше 36 ч.`] : undefined,
+    },
+    {
+      id: 'average-time', tone: averageTone, title: 'Средняя нагрузка', value: `${weeklyEquivalentHours} ч / неделю`, explanation: averageExplanation,
+      findings: averageTone === 'attention' ? [`Эквивалент выбранного месяца — ${hourText(weeklyEquivalentHours)} в неделю, ориентир ATS §36 — 48 ч. Окончательный результат считается за полный расчётный период.`] : undefined,
+    },
   )
   if (homeDutyHours) checks.push({
     id: 'home-duty', tone: homeDutyHours > 155 ? 'attention' : 'ok', title: 'Домашнее дежурство V', value: `${homeDutyHours} из 155 ч`,
     explanation: 'Для päästeteenistuja PäästeTS §20(6) прямо считает valveaeg частью отдыха и ограничивает его 155 часами в месяц. Поэтому V не уменьшает рассчитанный свободный промежуток. Но время фактического вызова уже является работой; PDF его не содержит, и приложение не может прибавить его автоматически.',
+    findings: homeDutyHours > 155 ? [`В графике ${hourText(homeDutyHours)} valveaeg — на ${hourText(homeDutyHours - 155)} больше месячного предела 155 ч.`] : undefined,
   })
   if (shortenedShifts.length) checks.push({
     id: 'shortened-days', tone: 'info', title: 'Работа перед праздником', value: `${shortenedShifts.length} рабочий день`,

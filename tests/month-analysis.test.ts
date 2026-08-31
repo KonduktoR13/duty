@@ -45,7 +45,10 @@ describe('monthly roster analysis', () => {
       record('2026-09', []),
     ], '2026-08', 'D12')
     expect(result.operationalShiftCount).toBe(1)
-    expect(result.checks.find(check => check.id === 'shift-rest')).toMatchObject({ tone: 'attention', value: 'Меньше 11 ч' })
+    expect(result.checks.find(check => check.id === 'shift-rest')).toMatchObject({
+      tone: 'attention', value: 'Меньше 11 ч',
+      findings: ['Смена закончилась 04.08 08:00, следующая работа — 04.08 08:00. Отдых 0 ч, требуется 11 ч.'],
+    })
   })
 
   it('does not treat scheduled rescue-service V standby as interrupting compensatory rest', () => {
@@ -90,6 +93,16 @@ describe('monthly roster analysis', () => {
       { date: '2026-08-03', kind: 'hours', raw: '8', hours: 8 },
     ])], '2026-08', 'D12')
     expect(result.checks.find(check => check.id === 'home-duty')).toMatchObject({ tone: 'attention', value: '156 из 155 ч' })
+    expect(result.checks.find(check => check.id === 'home-duty')?.findings).toEqual(['В графике 156 ч valveaeg — на 1 ч больше месячного предела 155 ч.'])
     expect(result.minimumRestHours).toBe(40)
+  })
+
+  it('explains a monthly-equivalent workload warning with its numbers', () => {
+    const marks: DayMark[] = Array.from({ length: 9 }, (_, index) => ({ date: `2026-08-${String(index * 3 + 1).padStart(2, '0')}`, kind: 'hours', raw: '24', hours: 24 }))
+    const result = analyzeMonth([record('2026-08', marks)], '2026-08', 'D12')
+    const average = result.checks.find(check => check.id === 'average-time')
+    expect(average?.tone).toBe('attention')
+    expect(average?.findings?.[0]).toContain('48,8 ч в неделю')
+    expect(average?.findings?.[0]).toContain('ориентир ATS §36 — 48 ч')
   })
 })

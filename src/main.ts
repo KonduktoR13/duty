@@ -411,7 +411,14 @@ function formatAnalysisHours(value: number) {
 
 function analysisRule(check: AnalysisCheck) {
   const icon = check.tone === 'ok' ? '✓' : check.tone === 'attention' ? '!' : 'i'
-  return '<details class="analysis-rule ' + check.tone + '"><summary><i>' + icon + '</i><span><b>' + esc(check.title) + '</b><small>' + esc(check.value) + '</small></span><em>⌄</em></summary><p>' + esc(check.explanation) + '</p></details>'
+  const findings = check.findings?.length ? '<ul class="analysis-findings">' + check.findings.map(finding => '<li>' + esc(finding) + '</li>').join('') + '</ul>' : ''
+  return '<details class="analysis-rule ' + check.tone + '" id="analysis-' + check.id + '"' + (check.tone === 'attention' ? ' open' : '') + '><summary><i>' + icon + '</i><span><b>' + esc(check.title) + '</b><small>' + esc(check.value) + '</small></span><em>⌄</em></summary>' + findings + '<p>' + esc(check.explanation) + '</p></details>'
+}
+
+function issueCountLabel(count: number) {
+  const remainder = count % 100
+  const ending = remainder >= 11 && remainder <= 14 ? 'пунктов' : count % 10 === 1 ? 'пункт' : count % 10 >= 2 && count % 10 <= 4 ? 'пункта' : 'пунктов'
+  return `${count} ${ending} для проверки`
 }
 
 function analysisView(month: MonthRecord) {
@@ -424,9 +431,10 @@ function analysisView(month: MonthRecord) {
   const tentative = analysis.tentativeHours ? '<p class="analysis-tentative">Возможные выходы # не включены: ' + formatAnalysisHours(analysis.tentativeHours) + '</p>' : ''
   const leave = analysis.leaveDays ? '<div><b>' + analysis.leaveDays + '</b><span>дней с отпуском</span></div>' : ''
   const boundary = (!analysis.hasPreviousMonth || !analysis.hasFollowingMonth) ? '<aside class="analysis-boundary"><b>Границы месяца видны не полностью</b><span>Для точной проверки отдыха загрузите также соседние месяцы.</span></aside>' : ''
-  const attention = analysis.checks.some(check => check.tone === 'attention')
-  const verdict = attention
-    ? '<section class="analysis-verdict attention"><i>!</i><div><b>Есть пункты, которые нужно проверить</b><span>Это сигнал посмотреть детали, а не утверждение о нарушении.</span></div></section>'
+  const attention = analysis.checks.filter(check => check.tone === 'attention')
+  const issueLinks = attention.map(check => '<li><button class="analysis-jump" data-analysis-jump="analysis-' + check.id + '"><span>' + esc(check.title) + '</span><b>' + esc(check.value) + '</b><i>↓</i></button></li>').join('')
+  const verdict = attention.length
+    ? '<section class="analysis-verdict attention"><i>!</i><div><b>Найдено ' + issueCountLabel(attention.length) + '</b><span>Нажмите на причину — откроется точный расчёт.</span><ul class="analysis-issue-links">' + issueLinks + '</ul></div></section>'
     : '<section class="analysis-verdict"><i>✓</i><div><b>В видимых данных отклонений не найдено</b><span>Проверены числовые условия, которые можно восстановить из PDF.</span></div></section>'
   return navigation + '<div class="analysis-mode"><b>Päästeametnik · Demineerimiskeskus</b><span>Summeeritud tööajaarvestus</span></div><section class="analysis-summary"><small>' + esc(currentDelta) + ' · рабочее время</small><strong>' + formatAnalysisHours(analysis.workHours) + '</strong>' + totalParts + '<div class="hours-bar" aria-label="Дневные ' + formatAnalysisHours(analysis.dayHours) + ', ночные ' + formatAnalysisHours(analysis.nightHours) + '"><i style="--night:' + (analysis.workHours ? analysis.nightHours / analysis.workHours * 100 : 0) + '%"></i></div><div class="hours-key"><span><i class="day-hours"></i>Дневные 06–22 <b>' + formatAnalysisHours(analysis.dayHours) + '</b></span><span><i class="night-hours"></i>Ночные 22–06 <b>' + formatAnalysisHours(analysis.nightHours) + '</b></span></div></section><p class="analysis-context"><b>24 ч — оперативная смена.</b> Остальные отметки, обычно 8 или 12 ч, показаны как служебные рабочие дни: это могут быть обучение, учения или дни командировки. Точную причину PDF не кодирует.</p>' + tentative + '<section class="analysis-metrics"><div><b>' + analysis.operationalShiftCount + '</b><span>оперативных смен · 24 ч</span></div><div><b>' + analysis.workdayCount + '</b><span>служебных рабочих дней</span></div><div><b>' + formatAnalysisHours(analysis.homeDutyHours) + '</b><span>valveaeg · V</span></div>' + leave + '</section>' + boundary + verdict + '<section class="law-analysis"><header><div><small>Предварительная оценка · päästeametnik</small><h2>Служба и отдых по закону</h2></div><span>PäästeTS</span></header><p class="law-intro">Показаны только применимые к вашему графику правила. Откройте пункт, чтобы увидеть норму и расчёт простым языком.</p>' + analysis.checks.map(analysisRule).join('') + '<aside class="legal-disclaimer"><b>Важно</b><span>Расчёт предполагает, что выбранный D-номер относится к päästeametnik Demineerimiskeskus. Это справочная автоматическая оценка, не юридическое заключение. PDF не показывает фактические вызовы во время V, сверхурочную работу вне графика, оценку рисков и полный расчётный период.</span><a href="https://www.riigiteataja.ee/akt/P%C3%A4%C3%A4steTS" target="_blank" rel="noopener">Päästeteenistuse seadus ↗</a><a href="https://www.riigiteataja.ee/akt/ATS" target="_blank" rel="noopener">Avaliku teenistuse seadus ↗</a><small>Учтены специальные нормы PäästeTS §20 и действующая с 13.02.2026 редакция ATS §41.</small></aside></section>'
 }
@@ -463,6 +471,14 @@ function bind() {
     }, 330)
   })
   document.querySelectorAll<HTMLButtonElement>('[data-section]').forEach(button => button.onclick = () => { section = button.dataset.section as AppSection; selectedDate = null; render() })
+  document.querySelectorAll<HTMLButtonElement>('[data-analysis-jump]').forEach(button => button.onclick = () => {
+    const target = document.getElementById(button.dataset.analysisJump!) as HTMLDetailsElement | null
+    if (!target) return
+    target.open = true
+    target.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    target.classList.add('analysis-focus')
+    window.setTimeout(() => target.classList.remove('analysis-focus'), 1200)
+  })
   document.querySelectorAll<HTMLElement>('[data-open-pdf]').forEach(item => {
     const open = () => {
     const popup = window.open('', '_blank')
