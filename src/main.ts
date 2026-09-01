@@ -3,11 +3,12 @@ import { storage } from './db'
 import { parsePdf } from './parser'
 import { allMarksForDelta, candidateForMonth, candidatesForMonth, foreignEntriesByDate, isWorkMark, knownDeltaNumbers, migrateMark, type ForeignDayEntry, type WorkMark } from './roster'
 import { applyCalendarSync, auditCalendarSync, buildCalendarDrafts, calendarSyncId, planCalendarSync, syncForAccount, syncSummary, type RemoteAudit } from './calendar-sync'
-import { clearGoogleAccessToken, deterministicGoogleEventId, discoverDutyAccounts, getGoogleAccountEmail, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess, setGoogleLoginHint } from './google-calendar'
+import { calendarRemindersLabel, normalizeCalendarReminders, reminderOffsetLabel, reminderSignature } from './calendar-reminders'
+import { clearGoogleAccessToken, deterministicGoogleEventId, discoverDutyAccounts, getGoogleAccountEmail, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, patchGoogleEventReminders, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess, setGoogleLoginHint } from './google-calendar'
 import { createGoogleAccountProfileId, googleEmailKey, resolveGoogleEmailProfile } from './google-account'
 import { humanMonth, timeLabel } from './schedule'
 import { analyzeMonth, type AnalysisCheck } from './month-analysis'
-import type { CalendarMonthSync, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
+import type { CalendarMonthSync, CalendarReminderSettings, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
 import './style.css'
 import './interaction.css'
 
@@ -334,6 +335,10 @@ function syncFor(month: string, deltaNumber = currentDelta) {
 
 function currentAccountSyncs() {
   return calendarSyncs.filter(sync => sync.accountProfileId === googleSettings.accountProfileId)
+}
+
+function currentCalendarReminders() {
+  return normalizeCalendarReminders(googleSettings.calendarReminders)
 }
 
 async function activateGoogleAccount(explicitSwitch: boolean) {
@@ -907,7 +912,8 @@ async function previewMonthSync(month: string, removeAll: boolean, after?: () =>
       : ''
     const title = removeAll ? 'Удалить события из Google?' : 'Подтвердите синхронизацию'
     const rows = previewRows(month, plan)
-    open('<h2>' + title + '</h2><p><b>' + syncSummary(plan) + '</b><br>Основной календарь · ' + esc(currentDelta) + '</p>' + warning + unsafeWarning + metadataNotice + (rows ? '<ul class="sync-preview">' + rows + '</ul>' : '') + '<button class="primary" id="apply-sync">' + (removeAll ? 'Удалить отмеченные события' : 'Применить изменения') + '</button><button id="cancel">Отмена</button>')
+    const reminderNote = removeAll ? '' : '<p class="reminder-preview"><b>Уведомления:</b> ' + esc(calendarRemindersLabel(currentCalendarReminders())) + '</p>'
+    open('<h2>' + title + '</h2><p><b>' + syncSummary(plan) + '</b><br>Основной календарь · ' + esc(currentDelta) + '</p>' + reminderNote + warning + unsafeWarning + metadataNotice + (rows ? '<ul class="sync-preview">' + rows + '</ul>' : '') + '<button class="primary" id="apply-sync">' + (removeAll ? 'Удалить отмеченные события' : 'Применить изменения') + '</button><button id="cancel">Отмена</button>')
     document.querySelector('#cancel')?.addEventListener('click', close)
     document.querySelector<HTMLButtonElement>('#apply-sync')?.addEventListener('click', async event => {
       const button = event.currentTarget as HTMLButtonElement
@@ -928,6 +934,7 @@ async function previewMonthSync(month: string, removeAll: boolean, after?: () =>
           gateway: googleCalendarGateway,
           eventId: (key, recovery) => deterministicGoogleEventId(install, calendarSyncId(month, currentDelta, googleSettings.accountProfileId), key, recovery),
           accountProfileId: googleSettings.accountProfileId,
+          reminders: currentCalendarReminders(),
         })
         if (removeAll) await storage.removeSync(result.id)
         else await storage.putSync(result)
@@ -1030,11 +1037,13 @@ function showGoogleSettings() {
     : 'Интеграция выключена. Локальные функции работают без Google.'
   const syncAction = googleSettings.enabled && selected ? '<button class="primary" id="google-sync-current">Проверить / синхронизировать ' + esc(humanMonth(selected)) + '</button>' : ''
   const removeMonthAction = currentEventCount ? '<button class="calendar-button google-remove-month" id="remove-google-current">Удалить события ' + esc(humanMonth(selected)) + ' из Google <span>локальный график оставить</span></button>' : ''
-  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + syncAction + (googleSettings.enabled ? '<button class="calendar-button" id="switch-google">Сменить Google-аккаунт <span>выбрать явно</span></button><button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + removeMonthAction + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
+  const remindersAction = googleSettings.enabled ? '<button class="calendar-button reminder-settings-button" id="calendar-reminders"><b>Уведомления о сменах</b><span>' + esc(calendarRemindersLabel(currentCalendarReminders())) + '</span><small>' + (eventCount ? 'Можно применить сразу ко всем синхронизированным сменам' : 'Будет применяться к новым сменам') + '</small></button>' : ''
+  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + syncAction + remindersAction + (googleSettings.enabled ? '<button class="calendar-button" id="switch-google">Сменить Google-аккаунт <span>выбрать явно</span></button><button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + removeMonthAction + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
   document.querySelector('#back')?.addEventListener('click', showSettings)
   document.querySelector('#connect-google')?.addEventListener('click', () => void connectGoogleFromSettings())
   document.querySelector('#switch-google')?.addEventListener('click', () => void switchGoogleAccount())
   document.querySelector('#google-sync-current')?.addEventListener('click', () => { close(); void beginMonthSync(selected) })
+  document.querySelector('#calendar-reminders')?.addEventListener('click', showCalendarReminderSettings)
   document.querySelector('#remove-google-current')?.addEventListener('click', () => void beginRemoveMonthEvents(selected))
   document.querySelector('#disconnect-google')?.addEventListener('click', async () => {
     await revokeGoogleAccess()
@@ -1044,6 +1053,125 @@ function showGoogleSettings() {
     showGoogleSettings()
   })
   document.querySelector('#remove-all-google')?.addEventListener('click', () => void removeSyncRecords(records, async () => {}))
+}
+
+function showCalendarReminderSettings() {
+  const current = currentCalendarReminders()
+  const option = (mode: CalendarReminderSettings['mode'], title: string, text: string) => '<button class="choice ' + (current.mode === mode ? 'recommended' : '') + '" data-reminder-mode="' + mode + '"><b>' + title + '</b><span>' + text + '</span></button>'
+  open('<h2>Уведомления о сменах</h2><p>Напоминания отсчитываются от начала смены. Настройка относится только к событиям этой PWA.</p><div class="choices">' +
+    option('default', 'Как в Google Calendar', 'Использовать стандартные уведомления основного календаря') +
+    option('none', 'Без уведомлений', 'Создавать смены без напоминаний') +
+    option('custom', 'Настроить', current.mode === 'custom' ? calendarRemindersLabel(current) : 'Одно или несколько напоминаний до начала смены') +
+    '</div><button id="back">Назад</button>')
+  document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+  document.querySelector('[data-reminder-mode="default"]')?.addEventListener('click', () => confirmCalendarReminderSettings({ mode: 'default' }))
+  document.querySelector('[data-reminder-mode="none"]')?.addEventListener('click', () => confirmCalendarReminderSettings({ mode: 'none' }))
+  document.querySelector('[data-reminder-mode="custom"]')?.addEventListener('click', () => showCustomCalendarReminders(current.mode === 'custom' ? current.minutes : [60]))
+}
+
+function showCustomCalendarReminders(initial: number[]) {
+  let selectedMinutes = [...new Set(initial)].sort((a, b) => a - b).slice(0, 5)
+  const renderEditor = () => {
+    const presets = [15, 60, 120, 720, 1_440].map(minutes => '<button data-reminder-preset="' + minutes + '"' + (selectedMinutes.includes(minutes) ? ' class="active" aria-pressed="true"' : ' aria-pressed="false"') + '>' + reminderOffsetLabel(minutes) + '</button>').join('')
+    const chips = selectedMinutes.length
+      ? selectedMinutes.map(minutes => '<button class="reminder-chip" data-remove-reminder="' + minutes + '" aria-label="Убрать ' + esc(reminderOffsetLabel(minutes)) + '">' + esc(reminderOffsetLabel(minutes)) + ' ×</button>').join('')
+      : '<span class="reminder-empty">Выберите хотя бы одно напоминание</span>'
+    open('<h2>Свои уведомления</h2><p>Можно установить до пяти напоминаний.</p><div class="reminder-presets">' + presets + '</div><div class="reminder-chips">' + chips + '</div><div class="reminder-add"><input id="reminder-value" type="number" inputmode="numeric" min="1" value="30" aria-label="Интервал"><select id="reminder-unit" aria-label="Единица времени"><option value="1">минут</option><option value="60">часов</option><option value="1440">дней</option></select><button id="add-reminder">Добавить</button></div><button class="primary" id="save-reminders"' + (selectedMinutes.length ? '' : ' disabled') + '>Продолжить</button><button id="back">Назад</button>')
+    document.querySelector('#back')?.addEventListener('click', showCalendarReminderSettings)
+    document.querySelectorAll<HTMLButtonElement>('[data-reminder-preset]').forEach(button => button.addEventListener('click', () => {
+      const minutes = Number(button.dataset.reminderPreset)
+      selectedMinutes = selectedMinutes.includes(minutes) ? selectedMinutes.filter(item => item !== minutes) : [...selectedMinutes, minutes].sort((a, b) => a - b).slice(0, 5)
+      renderEditor()
+    }))
+    document.querySelectorAll<HTMLButtonElement>('[data-remove-reminder]').forEach(button => button.addEventListener('click', () => {
+      selectedMinutes = selectedMinutes.filter(item => item !== Number(button.dataset.removeReminder))
+      renderEditor()
+    }))
+    document.querySelector('#add-reminder')?.addEventListener('click', () => {
+      const value = Number(document.querySelector<HTMLInputElement>('#reminder-value')?.value)
+      const unit = Number(document.querySelector<HTMLSelectElement>('#reminder-unit')?.value)
+      const minutes = value * unit
+      if (!Number.isInteger(minutes) || minutes < 0 || minutes > 40_320 || selectedMinutes.length >= 5) return
+      selectedMinutes = [...new Set([...selectedMinutes, minutes])].sort((a, b) => a - b)
+      renderEditor()
+    })
+    document.querySelector('#save-reminders')?.addEventListener('click', () => confirmCalendarReminderSettings({ mode: 'custom', minutes: selectedMinutes }))
+  }
+  renderEditor()
+}
+
+function confirmCalendarReminderSettings(value: CalendarReminderSettings) {
+  const next = normalizeCalendarReminders(value)
+  const records = currentAccountSyncs().filter(sync => Object.keys(sync.events).length)
+  const eventCount = records.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
+  if (!eventCount) {
+    void saveCalendarReminderSettings(next).then(showGoogleSettings)
+    return
+  }
+  open('<h2>Применить уведомления?</h2><p><b>' + esc(calendarRemindersLabel(next)) + '</b><br>Новая настройка всегда будет использоваться для следующих смен.</p><button class="primary" id="reminders-all">Применить ко всем сменам (' + eventCount + ')</button><button id="reminders-new">Только для новых</button><button id="back">Отмена</button>')
+  document.querySelector('#back')?.addEventListener('click', showCalendarReminderSettings)
+  document.querySelector('#reminders-new')?.addEventListener('click', async () => { await saveCalendarReminderSettings(next); showGoogleSettings() })
+  document.querySelector('#reminders-all')?.addEventListener('click', async () => { await saveCalendarReminderSettings(next); await updateAllCalendarReminders(records, next) })
+}
+
+async function saveCalendarReminderSettings(value: CalendarReminderSettings) {
+  googleSettings = { ...googleSettings, calendarReminders: normalizeCalendarReminders(value) }
+  await storage.set('googleIntegration', googleSettings)
+}
+
+async function updateAllCalendarReminders(records: CalendarMonthSync[], settings: CalendarReminderSettings) {
+  const contextMonth = records[0]?.month || selected
+  await withGoogleAuthorization(contextMonth, async () => {
+    open('<div class="busy"><div class="spinner"></div><h2>Проверяем события Google</h2><p>Проверяем защищённые метки PWA перед обновлением.</p></div>')
+    const audited: Array<{ sync: CalendarMonthSync; audits: RemoteAudit[] }> = []
+    for (const sync of records) audited.push({ sync, audits: await auditCalendarSync(sync, googleCalendarGateway) })
+    const allAudits = audited.flatMap(item => item.audits)
+    const updateCount = allAudits.filter(audit => audit.status === 'ok' || audit.status === 'changed' || audit.status === 'metadata').length
+    const missing = allAudits.filter(audit => audit.status === 'missing').length
+    const unsafe = allAudits.filter(audit => audit.status === 'unsafe').length
+    const skipped = missing + unsafe
+    if (!updateCount) {
+      open('<h2>Нет доступных событий</h2><p>Не найдено событий PWA, которым можно безопасно изменить уведомления.' + (skipped ? ' Пропущено: ' + skipped + '.' : '') + '</p><button class="primary" id="back">Понятно</button>')
+      document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+      return
+    }
+    open('<h2>Обновить уведомления?</h2><p><b>' + esc(calendarRemindersLabel(settings)) + '</b><br>Будет обновлено событий: ' + updateCount + '. Время, название и содержание событий не изменятся.' + (skipped ? ' Пропущено удалённых или небезопасных событий: ' + skipped + '.' : '') + '</p><button class="primary" id="confirm-reminder-update">Обновить уведомления</button><button id="back">Отмена</button>')
+    document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+    document.querySelector<HTMLButtonElement>('#confirm-reminder-update')?.addEventListener('click', async event => {
+      ;(event.currentTarget as HTMLButtonElement).disabled = true
+      try {
+        if (!hasLiveGoogleToken()) {
+          await requestGoogleToken('')
+          if (await activateGoogleAccount(false)) throw new GoogleAuthError('Google-аккаунт изменился. Повторите операцию для выбранного аккаунта.')
+        }
+        open('<div class="busy"><div class="spinner"></div><h2>Обновляем уведомления</h2><p>Не закрывайте это окно.</p></div>')
+        const signature = reminderSignature(settings)
+        const timestamp = Date.now()
+        for (const item of audited) {
+          const events = { ...item.sync.events }
+          for (const audit of item.audits) {
+            if (audit.status !== 'ok' && audit.status !== 'changed' && audit.status !== 'metadata') continue
+            const tracked = events[audit.key]
+            if (!tracked || !audit.remote) continue
+            const remote = await patchGoogleEventReminders(tracked.eventId, settings, audit.remote.etag)
+            events[audit.key] = {
+              ...tracked,
+              reminderSignature: signature,
+              etag: audit.status === 'changed' ? tracked.etag : (remote.etag || tracked.etag),
+              updated: remote.updated || tracked.updated,
+            }
+          }
+          await storage.putSync({ ...item.sync, events, syncedAt: timestamp, lastError: undefined })
+        }
+        await rememberGoogleSync(timestamp)
+        await refresh()
+        open('<h2>Уведомления обновлены</h2><p>Настройка применена к ' + updateCount + ' событиям этой PWA.' + (skipped ? ' Пропущено: ' + skipped + '.' : '') + '</p><button class="primary" id="back">Готово</button>')
+        document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
+      } catch (error) {
+        await handleGoogleError(contextMonth, error)
+      }
+    })
+  })
 }
 
 async function switchGoogleAccount() {

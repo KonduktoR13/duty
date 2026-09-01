@@ -1,4 +1,5 @@
-import type { CalendarEventDraft, CalendarMonthSync, DayMark, SyncedCalendarEvent } from './types'
+import type { CalendarEventDraft, CalendarMonthSync, CalendarReminderSettings, DayMark, SyncedCalendarEvent } from './types'
+import { reminderSignature } from './calendar-reminders'
 import { isWorkMark, type WorkMark } from './roster'
 
 export const CALENDAR_TIME_ZONE = 'Europe/Tallinn'
@@ -32,8 +33,8 @@ export type RemoteAudit = {
 
 export type CalendarGateway = {
   get(eventId: string): Promise<RemoteCalendarEvent | null>
-  insert(eventId: string, draft: CalendarEventDraft, privateProperties: Record<string, string>): Promise<RemoteCalendarEvent>
-  patch(eventId: string, draft: CalendarEventDraft, privateProperties: Record<string, string>, etag?: string): Promise<RemoteCalendarEvent>
+  insert(eventId: string, draft: CalendarEventDraft, privateProperties: Record<string, string>, reminders?: CalendarReminderSettings): Promise<RemoteCalendarEvent>
+  patch(eventId: string, draft: CalendarEventDraft, privateProperties: Record<string, string>, etag?: string, reminders?: CalendarReminderSettings): Promise<RemoteCalendarEvent>
   remove(eventId: string, etag?: string): Promise<void>
 }
 
@@ -140,11 +141,13 @@ export type ApplySyncOptions = {
   gateway: CalendarGateway
   eventId: (key: string, recovery?: boolean) => Promise<string>
   accountProfileId?: string
+  reminders?: CalendarReminderSettings
   now?: number
 }
 
 export async function applyCalendarSync(options: ApplySyncOptions): Promise<CalendarMonthSync> {
-  const { month, deltaNumber, desired, previous, audits, gateway, eventId, accountProfileId } = options
+  const { month, deltaNumber, desired, previous, audits, gateway, eventId, accountProfileId, reminders } = options
+  const appliedReminderSignature = reminderSignature(reminders)
   const plan = planCalendarSync(desired, previous)
   const auditByKey = new Map(audits.map(audit => [audit.key, audit]))
   const changedKeys = new Set(plan.changed.map(item => item.after.key))
@@ -154,18 +157,18 @@ export async function applyCalendarSync(options: ApplySyncOptions): Promise<Cale
     const audit = old ? auditByKey.get(draft.key) : undefined
     let remote: RemoteCalendarEvent
     if (!old) {
-      remote = await gateway.insert(await eventId(draft.key), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId))
+      remote = await gateway.insert(await eventId(draft.key), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId), reminders)
     } else if (audit?.status === 'missing') {
-      remote = await gateway.insert(await eventId(`${draft.key}|missing:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId))
+      remote = await gateway.insert(await eventId(`${draft.key}|missing:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId), reminders)
     } else if (audit?.status === 'unsafe') {
-      remote = await gateway.insert(await eventId(`${draft.key}|unsafe:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId))
+      remote = await gateway.insert(await eventId(`${draft.key}|unsafe:${old.eventId}`, true), draft, privateProperties(month, deltaNumber, draft.key, accountProfileId), reminders)
     } else if (changedKeys.has(draft.key) || audit?.status === 'changed' || audit?.status === 'metadata') {
-      remote = await gateway.patch(old.eventId, draft, privateProperties(month, deltaNumber, draft.key, accountProfileId), audit?.remote?.etag)
+      remote = await gateway.patch(old.eventId, draft, privateProperties(month, deltaNumber, draft.key, accountProfileId), audit?.remote?.etag, reminders)
     } else {
       next[draft.key] = old
       continue
     }
-    next[draft.key] = { eventId: remote.id, draft, etag: remote.etag, updated: remote.updated }
+    next[draft.key] = { eventId: remote.id, draft, etag: remote.etag, updated: remote.updated, reminderSignature: appliedReminderSignature }
   }
   for (const old of plan.removed) {
     const audit = auditByKey.get(old.draft.key)

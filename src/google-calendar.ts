@@ -1,5 +1,6 @@
-import type { CalendarEventDraft } from './types'
+import type { CalendarEventDraft, CalendarReminderSettings } from './types'
 import { CALENDAR_MARKER, type CalendarGateway, type RemoteCalendarEvent } from './calendar-sync'
+import { googleReminders } from './calendar-reminders'
 
 export const GOOGLE_CLIENT_ID = '985972419123-valpboh05jcstqn7h68qj2d0kql0lfes.apps.googleusercontent.com'
 export const GOOGLE_CALENDAR_SCOPE = 'https://www.googleapis.com/auth/calendar.events.owned'
@@ -145,7 +146,7 @@ export async function discoverDutyAccounts(): Promise<DutyAccountDiscovery> {
   return { profileIds: [...profileIds], eventIds }
 }
 
-export function googleEventPayload(eventId: string | undefined, draft: CalendarEventDraft, properties: Record<string, string>) {
+export function googleEventPayload(eventId: string | undefined, draft: CalendarEventDraft, properties: Record<string, string>, reminderSettings?: CalendarReminderSettings) {
   return {
     ...(eventId ? { id: eventId } : {}),
     summary: draft.summary,
@@ -154,12 +155,13 @@ export function googleEventPayload(eventId: string | undefined, draft: CalendarE
     transparency: 'opaque' as const,
     start: draft.start,
     end: draft.end,
+    reminders: googleReminders(reminderSettings),
     extendedProperties: { private: properties },
   }
 }
 
-function body(eventId: string | undefined, draft: CalendarEventDraft, properties: Record<string, string>) {
-  return JSON.stringify(googleEventPayload(eventId, draft, properties))
+function body(eventId: string | undefined, draft: CalendarEventDraft, properties: Record<string, string>, reminders?: CalendarReminderSettings) {
+  return JSON.stringify(googleEventPayload(eventId, draft, properties, reminders))
 }
 
 export function collisionGoogleEventId(eventId: string, attempt: number) {
@@ -177,11 +179,11 @@ export const googleCalendarGateway: CalendarGateway = {
     const event = await api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, {}, true) as RemoteCalendarEvent | null
     return event?.status === 'cancelled' ? null : event
   },
-  insert: async (eventId, draft, properties) => {
+  insert: async (eventId, draft, properties, reminders) => {
     for (let attempt = 0; attempt < 16; attempt += 1) {
       const candidateId = collisionGoogleEventId(eventId, attempt)
       try {
-        return await api('/calendars/primary/events', { method: 'POST', body: body(candidateId, draft, properties) }) as RemoteCalendarEvent
+        return await api('/calendars/primary/events', { method: 'POST', body: body(candidateId, draft, properties, reminders) }) as RemoteCalendarEvent
       } catch (error) {
         if (!(error instanceof GoogleApiError) || error.status !== 409) throw error
         const existing = await api(`/calendars/primary/events/${encodeURIComponent(candidateId)}`, {}, true) as RemoteCalendarEvent | null
@@ -189,13 +191,25 @@ export const googleCalendarGateway: CalendarGateway = {
         // can return success while the event remains invisible, so use the next ID.
         if (!existing || existing.status === 'cancelled') continue
         if (!ownsEvent(existing, properties)) throw error
-        return await api(`/calendars/primary/events/${encodeURIComponent(candidateId)}`, { method: 'PATCH', headers: existing.etag ? { 'If-Match': existing.etag } : {}, body: body(undefined, draft, properties) }) as RemoteCalendarEvent
+        return await api(`/calendars/primary/events/${encodeURIComponent(candidateId)}`, { method: 'PATCH', headers: existing.etag ? { 'If-Match': existing.etag } : {}, body: body(undefined, draft, properties, reminders) }) as RemoteCalendarEvent
       }
     }
     throw new GoogleApiError('Google Calendar не освободил идентификатор удалённого события', 409)
   },
-  patch: (eventId, draft, properties, etag) => api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, { method: 'PATCH', headers: etag ? { 'If-Match': etag } : {}, body: body(undefined, draft, properties) }) as Promise<RemoteCalendarEvent>,
+  patch: (eventId, draft, properties, etag, reminders) => api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, { method: 'PATCH', headers: etag ? { 'If-Match': etag } : {}, body: body(undefined, draft, properties, reminders) }) as Promise<RemoteCalendarEvent>,
   remove: (eventId, etag) => api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, { method: 'DELETE', headers: etag ? { 'If-Match': etag } : {} }, true).then(() => undefined),
+}
+
+export function googleReminderPatchPayload(settings?: CalendarReminderSettings) {
+  return { reminders: googleReminders(settings) }
+}
+
+export function patchGoogleEventReminders(eventId: string, settings: CalendarReminderSettings, etag?: string) {
+  return api(`/calendars/primary/events/${encodeURIComponent(eventId)}`, {
+    method: 'PATCH',
+    headers: etag ? { 'If-Match': etag } : {},
+    body: JSON.stringify(googleReminderPatchPayload(settings)),
+  }) as Promise<RemoteCalendarEvent>
 }
 
 export async function deterministicGoogleEventId(installationId: string, syncId: string, key: string, recovery = false) {

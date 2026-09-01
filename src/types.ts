@@ -18,11 +18,17 @@ export type CalendarEventDraft = {
   end: { dateTime: string; timeZone: string }
 }
 
+export type CalendarReminderSettings =
+  | { mode: 'default' }
+  | { mode: 'none' }
+  | { mode: 'custom'; minutes: number[] }
+
 export type SyncedCalendarEvent = {
   eventId: string
   draft: CalendarEventDraft
   etag?: string
   updated?: string
+  reminderSignature?: string
 }
 
 export type CalendarSyncError = 'auth' | 'offline' | 'api'
@@ -44,6 +50,7 @@ export type GoogleIntegrationSettings = {
   connectedAt?: number
   lastSyncAt?: number
   lastSyncByAccount?: Record<string, number>
+  calendarReminders?: CalendarReminderSettings
 }
 
 export type MonthRecord = {
