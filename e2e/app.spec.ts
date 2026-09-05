@@ -11,6 +11,45 @@ async function importRoster(page: Page, code = '24') {
   await expect(page.locator('#dialog')).not.toBeVisible()
 }
 
+test('header D-number picker closes on selection, repeated selection and cancel', async ({page}) => {
+  await page.goto('/')
+  await importRoster(page)
+  await page.locator('#header-delta').click()
+  await page.locator('[data-select-delta="D40"]').click()
+  await expect(page.locator('#header-delta')).toHaveText('D40 ▾')
+  await expect(page.locator('#dialog')).not.toBeVisible()
+  await page.locator('#header-delta').click()
+  await page.locator('[data-select-delta="D40"]').click()
+  await expect(page.locator('#dialog')).not.toBeVisible()
+  await page.locator('#header-delta').click()
+  await page.locator('#cancel').click()
+  await expect(page.locator('#dialog')).not.toBeVisible()
+  await expect(page.locator('#header-delta')).toBeFocused()
+})
+
+test('settings picker returns to settings and closing stays accessible when scrolled', async ({page}) => {
+  await page.setViewportSize({width:360,height:480})
+  await page.emulateMedia({colorScheme:'dark'})
+  await page.goto('/')
+  await importRoster(page)
+  await page.locator('#settings').click()
+  await page.locator('#delta-settings').click()
+  await page.locator('[data-select-delta="D40"]').click()
+  await expect(page.locator('#dialog h2')).toHaveText('Настройки')
+  await expect(page.locator('#delta-settings')).toContainText('D40')
+  await page.locator('#delta-settings').click()
+  await page.locator('#cancel').click()
+  await expect(page.locator('#dialog h2')).toHaveText('Настройки')
+  await page.locator('.dialog-content').evaluate(el=>el.scrollTop=el.scrollHeight)
+  await expect(page.locator('#dialog #close')).toBeInViewport()
+  await expect(page.locator('#wipe')).not.toBeVisible()
+  await page.locator('#dialog #close').click()
+  await expect(page.locator('#dialog')).not.toBeVisible()
+  await page.locator('#header-delta').click()
+  await page.locator('[data-select-delta="D12"]').click()
+  await expect(page.locator('#dialog')).not.toBeVisible()
+})
+
 test('empty start, navigation, import and unique boundary shift', async ({ page }) => {
   const errors: string[] = []
   page.on('pageerror', (error) => errors.push(error.message))

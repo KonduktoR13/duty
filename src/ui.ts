@@ -19,7 +19,7 @@ let opener: HTMLElement | null = null
 export function dialogBusy() {
   return Boolean(document.querySelector('#dialog[open] .busy'))
 }
-export function openDialog(html: string) {
+export function openDialog(html: string, layout?: 'settings' | 'picker') {
   let dialog = document.querySelector<HTMLDialogElement>('#dialog')
   if (!dialog) {
     dialog = document.createElement('dialog')
@@ -27,7 +27,9 @@ export function openDialog(html: string) {
     document.body.append(dialog)
   }
   if (!dialog.open) opener = document.activeElement as HTMLElement
+  dialog.className = layout ? `structured-dialog ${layout}-dialog` : ''
   dialog.innerHTML = html
+  dialog.scrollTop = 0
   const heading = dialog.querySelector('h2')
   if (heading) {
     heading.id = 'dialog-title'

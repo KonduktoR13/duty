@@ -13,10 +13,12 @@ import { analysisView } from './analysis-view'
 import { importReview } from './import-review'
 import { documentsView } from './documents-view'
 import { createCalendarView } from './calendar-view'
+import { settingsView, deltaPickerView } from './settings-view'
 import type { CalendarMonthSync, CalendarReminderSettings, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
 import './style.css'
 import './interaction.css'
 import './experience.css'
+import './settings.css'
 
 type PreparedMonthTransition = {
   calendar: HTMLElement
@@ -50,6 +52,7 @@ let lastRenderedSection: AppSection = section
 let calendarMode: 'grid' | 'list' = 'grid'
 let showColleagues = false
 let revisions = new Set<string>()
+let deltaReturnToSettings = false
 
 const localDateId = (value = new Date()) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-')
 const todayId = () => tallinnWallTime().slice(0, 10)
@@ -181,7 +184,7 @@ function render() {
   settings.innerHTML = icon('settings')
   document.querySelector('.brand>span')!.innerHTML = icon('calendar')
   if (currentDelta) {
-    const delta = document.createElement('button'); delta.className = 'delta-chip'; delta.id = 'header-delta'; delta.textContent = currentDelta + ' ▾'; delta.setAttribute('aria-label', 'Выбран ' + currentDelta + '. Сменить номер'); delta.onclick = showDeltaSettings; settings.before(delta)
+    const delta = document.createElement('button'); delta.className = 'delta-chip'; delta.id = 'header-delta'; delta.textContent = currentDelta + ' ▾'; delta.setAttribute('aria-label', 'Выбран ' + currentDelta + '. Сменить номер'); delta.onclick = () => showDeltaSettings(false); settings.before(delta)
   }
   document.querySelectorAll<HTMLElement>('[data-night]').forEach(bar => bar.style.setProperty('--night', bar.dataset.night + '%'))
   requestAnimationFrame(() => {
@@ -872,15 +875,13 @@ function showSettings() {
   const trackedAcrossAccounts = calendarSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
   const googleLabel = googleSettings.enabled ? `${googleSettings.accountEmail || 'аккаунт определяется'} · Подключено` : 'Не подключено'
   const accountLastSync = googleSettings.accountProfileId ? googleSettings.lastSyncByAccount?.[googleSettings.accountProfileId] : undefined
-  const lastSync = accountLastSync ? new Date(accountLastSync).toLocaleString('ru-RU') : 'синхронизаций ещё не было'
-  open('<h2>Настройки</h2><p>Графики и оригиналы PDF сохраняются на этом устройстве.</p><button class="calendar-button" id="delta-settings">Текущий D-номер <span>' + esc(currentDelta || 'не выбран') + '</span></button><button class="calendar-button google-settings-card" id="google-settings"><b>Google Calendar</b><span>' + esc(googleLabel) + '</span><small>Последняя синхронизация: ' + esc(lastSync) + (tracked ? ' · событий приложения: ' + tracked : '') + '</small></button><nav class="settings-legal" aria-label="Правовая информация"><a href="privacy/" target="_blank" rel="noopener">Политика конфиденциальности</a><a href="terms/" target="_blank" rel="noopener">Условия использования</a></nav><button class="danger" id="wipe">Удалить все локальные данные</button><button class="primary" id="close">Закрыть</button>')
+  const lastSync = accountLastSync ? 'Последняя синхронизация: ' + new Date(accountLastSync).toLocaleString('ru-RU') : 'Синхронизаций ещё не было'
+  open(settingsView({ delta: currentDelta, googleLabel, lastSync, tracked }), 'settings')
   document.querySelector('#close')?.addEventListener('click', close)
-  const tools = document.createElement('section')
-  tools.innerHTML = '<button class="calendar-button" id="export-backup">Сохранить резервную копию</button><button class="calendar-button" id="import-backup">Восстановить из копии</button><p class="storage-status" role="status">Проверяем хранилище…</p>'
-  document.querySelector('#wipe')?.before(tools)
+  const storageStatus = document.querySelector<HTMLElement>('#dialog .storage-status')!
   bindBackups()
-  run(async () => { tools.querySelector('.storage-status')!.textContent = await (await import('./backup')).storageDescription() })
-  document.querySelector('#delta-settings')?.addEventListener('click', showDeltaSettings)
+  void import('./backup').then(backup => backup.storageDescription()).then(text => { storageStatus.textContent = text }).catch(() => { storageStatus.textContent = 'Не удалось определить занятое место. Сохранённые графики доступны.' })
+  document.querySelector('#delta-settings')?.addEventListener('click', () => showDeltaSettings(true))
   document.querySelector('#google-settings')?.addEventListener('click', showGoogleSettings)
   document.querySelector('#wipe')?.addEventListener('click', async () => {
     const warning = trackedAcrossAccounts ? ' События Google Calendar при этом останутся; сначала удалите их через настройки соответствующего Google-аккаунта, если они больше не нужны.' : ''
@@ -896,15 +897,20 @@ function showSettings() {
   })
 }
 
-function showDeltaSettings() {
-  const choices = knownDeltaNumbers(months).map(number => '<button class="choice ' + (number === currentDelta ? 'recommended' : '') + '" data-select-delta="' + esc(number) + '"><b>' + esc(number) + '</b><span>' + (number === currentDelta ? 'Выбран сейчас' : 'Найден в импортированных PDF') + '</span></button>').join('')
-  open('<h2>Текущий D-номер</h2><p>PDF и остальные D-номера сохранятся. Календарь перестроится сразу.</p><div class="choices">' + choices + '</div><button class="primary" id="cancel">Отмена</button>')
-  document.querySelector('#cancel')?.addEventListener('click', showSettings)
-  document.querySelectorAll<HTMLButtonElement>('[data-select-delta]').forEach(button => button.addEventListener('click', () => void proposeDeltaSwitch(button.dataset.selectDelta!)))
+function showDeltaSettings(fromSettings = deltaReturnToSettings) {
+  deltaReturnToSettings = fromSettings
+  open(deltaPickerView(knownDeltaNumbers(months), currentDelta, fromSettings), 'picker')
+  document.querySelector('#cancel')?.addEventListener('click', finishDeltaSelection)
+  document.querySelectorAll<HTMLButtonElement>('[data-select-delta]').forEach(button => button.addEventListener('click', () => {
+    document.querySelectorAll<HTMLButtonElement>('[data-select-delta]').forEach(choice => choice.disabled = true)
+    run(() => proposeDeltaSwitch(button.dataset.selectDelta!))
+  }))
 }
 
+function finishDeltaSelection() { if (deltaReturnToSettings) showSettings(); else close() }
+
 async function proposeDeltaSwitch(nextDelta: string) {
-  if (nextDelta === currentDelta) { showSettings(); return }
+  if (nextDelta === currentDelta) { finishDeltaSelection(); return }
   const oldDelta = currentDelta
   const oldSyncs = currentAccountSyncs().filter(sync => sync.deltaNumber === oldDelta && Object.keys(sync.events).length)
   if (!oldSyncs.length) {
@@ -913,17 +919,18 @@ async function proposeDeltaSwitch(nextDelta: string) {
   }
   const eventCount = oldSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
   open('<h2>' + esc(oldDelta) + ' уже синхронизирован</h2><p>В Google Calendar отслеживается событий: ' + eventCount + '. Они не будут смешаны с ' + esc(nextDelta) + '.</p><button class="primary" id="keep-and-switch">Сменить D-номер, события оставить</button><button class="danger" id="remove-and-switch">Удалить события ' + esc(oldDelta) + ' из Google</button><button id="cancel">Отмена</button>')
-  document.querySelector('#cancel')?.addEventListener('click', showDeltaSettings)
+  document.querySelector('#cancel')?.addEventListener('click', () => showDeltaSettings())
   document.querySelector('#keep-and-switch')?.addEventListener('click', () => void applyDeltaSwitch(nextDelta))
   document.querySelector('#remove-and-switch')?.addEventListener('click', () => void removeSyncRecords(oldSyncs, () => applyDeltaSwitch(nextDelta)))
 }
 
 async function applyDeltaSwitch(nextDelta: string) {
+  await storage.set('deltaNumber', nextDelta)
   currentDelta = nextDelta
   selectedDate = null
-  await storage.set('deltaNumber', nextDelta)
   close()
   render()
+  if (deltaReturnToSettings) showSettings()
 }
 
 function showGoogleSettings() {
@@ -937,7 +944,7 @@ function showGoogleSettings() {
   const syncAction = googleSettings.enabled && selected ? '<button class="primary" id="google-sync-current">Проверить / синхронизировать ' + esc(humanMonth(selected)) + '</button>' : ''
   const removeMonthAction = currentEventCount ? '<button class="calendar-button google-remove-month" id="remove-google-current">Удалить события ' + esc(humanMonth(selected)) + ' из Google <span>локальный график оставить</span></button>' : ''
   const remindersAction = googleSettings.enabled ? '<button class="calendar-button reminder-settings-button" id="calendar-reminders"><b>Уведомления о сменах</b><span>' + esc(calendarRemindersLabel(currentCalendarReminders())) + '</span><small>' + (eventCount ? 'Можно применить сразу ко всем синхронизированным сменам' : 'Будет применяться к новым сменам') + '</small></button>' : ''
-  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в <b>primary</b>. PWA управляет только событиями со своей защищённой меткой.</p>' + syncAction + remindersAction + (googleSettings.enabled ? '<button class="calendar-button" id="switch-google">Сменить Google-аккаунт <span>выбрать явно</span></button><button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + removeMonthAction + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
+  open('<h2>Google Calendar</h2><p>' + status + '</p><p>Смены добавляются в ваш основной календарь. Приложение изменяет только созданные им события.</p>' + syncAction + remindersAction + (googleSettings.enabled ? '<button class="calendar-button" id="switch-google">Сменить Google-аккаунт <span>выбрать явно</span></button><button class="calendar-button" id="disconnect-google">Отключить интеграцию <span>события оставить</span></button>' : '<button class="primary" id="connect-google">Подключить Google Calendar</button>') + removeMonthAction + (eventCount ? '<button class="danger" id="remove-all-google">Удалить все события PWA из Google (' + eventCount + ')</button>' : '') + '<button id="back">Назад</button>')
   document.querySelector('#back')?.addEventListener('click', showSettings)
   document.querySelector('#connect-google')?.addEventListener('click', () => void connectGoogleFromSettings())
   document.querySelector('#switch-google')?.addEventListener('click', () => void switchGoogleAccount())
@@ -1224,7 +1231,7 @@ function networkChanged() {
   if (document.querySelector('#dialog[open]')) {
     const dialog = document.querySelector('#dialog')!
     let status = dialog.querySelector<HTMLElement>('.network-status')
-    if (!status) { status = document.createElement('p'); status.className = 'network-status'; status.setAttribute('role', 'status'); dialog.append(status) }
+    if (!status) { status = document.createElement('p'); status.className = 'network-status'; status.setAttribute('role', 'status'); (dialog.querySelector('.dialog-content') || dialog).append(status) }
     status.textContent = navigator.onLine ? 'Соединение восстановлено.' : 'Нет сети. Локальные данные доступны.'
   } else render()
 }
