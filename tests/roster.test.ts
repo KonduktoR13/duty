@@ -13,6 +13,18 @@ const month: MonthRecord = {
 }
 
 describe('D-number roster selection', () => {
+  it('infers the unique last-day 16 without the next PDF, preserving source data', () => {
+    const source = { ...month, candidates: [candidate('D12', '2026-08-31', 16), candidate('D40', '2026-08-31', 8)] }
+    expect(allMarksForDelta([source], 'D12')).toEqual([{date:'2026-08-31',kind:'hours',raw:'24',hours:24}])
+    expect(source.candidates[0].marks[0]).toMatchObject({raw:'16',hours:16})
+    const next = {...month,id:'2026-09',candidates:[candidate('D12','2026-09-01',8)]}
+    expect(allMarksForDelta([source,next], 'D12')).toHaveLength(1)
+  })
+  it('does not infer 24 when two employees have 16 or only a legacy row is available', () => {
+    const source = {...month,candidates:[candidate('D12','2026-08-31',16),candidate('D40','2026-08-31',16)]}
+    expect(allMarksForDelta([source],'D12')[0]).toMatchObject({raw:'16',hours:16})
+    expect(allMarksForDelta([{...source,candidates:undefined,marks:source.candidates[0].marks}],'D12')[0]).toMatchObject({hours:16})
+  })
   it('switches the visible candidate without removing the others', () => {
     expect(candidateForMonth(month, 'D12')?.marks[0]).toMatchObject({ hours: 24 })
     expect(candidateForMonth(month, 'D40')?.marks[0]).toMatchObject({ hours: 8 })

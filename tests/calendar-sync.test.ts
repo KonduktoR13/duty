@@ -15,6 +15,17 @@ function sync(events: Record<string, SyncedCalendarEvent>): CalendarMonthSync {
 }
 
 describe('Google Calendar sync model', () => {
+  it('journals completed inserts before a later request fails, retaining pending removals', async () => {
+    const desired = buildCalendarDrafts(month,delta,[{date:'2026-08-03',kind:'hours',raw:'24',hours:24},{date:'2026-08-07',kind:'hours',raw:'24',hours:24}])
+    const removed = synced('old',buildCalendarDrafts(month,delta,[{date:'2026-08-01',kind:'hours',raw:'8',hours:8}])[0])
+    const previous = sync({[removed.draft.key]:removed})
+    const checkpoints:CalendarMonthSync[]=[]
+    let count=0
+    const gateway:CalendarGateway={get:async()=>null,insert:async id=>{if(count++)throw new Error('network');return{id,etag:'saved'}},patch:async()=>{throw new Error('unexpected')},remove:async()=>{throw new Error('unexpected')}}
+    await expect(applyCalendarSync({month,deltaNumber:delta,desired,previous,audits:[{key:removed.draft.key,status:'ok'}],gateway,eventId:async key=>key,checkpoint:async value=>{checkpoints.push(value)}})).rejects.toThrow('network')
+    expect(Object.keys(checkpoints[0].events)).toEqual([removed.draft.key,desired[0].key])
+    expect(planCalendarSync(desired,checkpoints[0])).toMatchObject({added:[desired[1]],removed:[removed],changed:[]})
+  })
   it('builds stable timed events and omits unconfirmed or incomplete work', () => {
     const drafts = buildCalendarDrafts(month, delta, [
       { date: '2026-08-03', kind: 'hours', raw: '24', hours: 24 },

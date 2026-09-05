@@ -1,6 +1,6 @@
 import type { CalendarEventDraft, CalendarMonthSync, CalendarReminderSettings, DayMark, SyncedCalendarEvent } from './types'
 import { reminderSignature } from './calendar-reminders'
-import { isWorkMark, type WorkMark } from './roster'
+import { workIntervals } from './intervals'
 
 export const CALENDAR_TIME_ZONE = 'Europe/Tallinn'
 export const CALENDAR_MARKER = 'duty-pwa-v1'
@@ -38,56 +38,12 @@ export type CalendarGateway = {
   remove(eventId: string, etag?: string): Promise<void>
 }
 
-const pad = (value: number) => String(value).padStart(2, '0')
-
-function addWallMinutes(date: string, hour: number, minutes: number, duration: number) {
-  const value = new Date(`${date}T${pad(hour)}:${pad(minutes)}:00Z`)
-  value.setUTCMinutes(value.getUTCMinutes() + duration)
-  return `${value.getUTCFullYear()}-${pad(value.getUTCMonth() + 1)}-${pad(value.getUTCDate())}T${pad(value.getUTCHours())}:${pad(value.getUTCMinutes())}:00`
-}
-
-function localDateTime(date: string, hour: number, minutes = 0) {
-  return `${date}T${pad(hour)}:${pad(minutes)}:00`
-}
-
-function isIncompleteBoundary(mark: DayMark) {
-  if (mark.kind !== 'hours' || mark.hours !== 16 || mark.raw !== '16') return false
-  const value = new Date(mark.date + 'T12:00:00')
-  return value.getDate() === new Date(value.getFullYear(), value.getMonth() + 1, 0).getDate()
-}
-
 export function buildCalendarDrafts(month: string, deltaNumber: string, marks: DayMark[]): CalendarEventDraft[] {
-  const monthMarks = marks.filter((mark): mark is WorkMark => mark.date.startsWith(month + '-') && isWorkMark(mark) && !isIncompleteBoundary(mark))
-  const grouped = new Map<string, typeof monthMarks>()
-  for (const mark of monthMarks) grouped.set(mark.date, [...(grouped.get(mark.date) || []), mark])
-  const drafts: CalendarEventDraft[] = []
-  for (const [date, dateMarks] of grouped) {
-    const kindCount = new Map<string, number>()
-    for (const mark of dateMarks.sort((a, b) => a.kind.localeCompare(b.kind) || a.raw.localeCompare(b.raw))) {
-      const index = (kindCount.get(mark.kind) || 0) + 1
-      kindCount.set(mark.kind, index)
-      const key = `${date}:${mark.kind}:${index}`
-      const onsite12 = dateMarks.some(item => item.kind === 'hours' && item.hours === 12)
-      const startHour = mark.kind === 'home' ? (onsite12 && mark.hours <= 4 ? 20 : 0) : 8
-      const startMinute = 0
-      const duration = Math.round(mark.hours * 60)
-      const title = mark.kind === 'home'
-        ? `Koduvalve · ${mark.raw}`
-        : mark.hours === 24 ? 'Рабочая смена · 24 ч' : `Работа · ${String(mark.hours).replace('.', ',')} ч`
-      drafts.push({
-        key,
-        date,
-        kind: mark.kind,
-        raw: mark.raw,
-        hours: mark.hours,
-        summary: title,
-        description: `Создано PWA «Мои смены» из локального PDF. ${deltaNumber} · код ${mark.raw}.`,
-        start: { dateTime: localDateTime(date, startHour, startMinute), timeZone: CALENDAR_TIME_ZONE },
-        end: { dateTime: addWallMinutes(date, startHour, startMinute, duration), timeZone: CALENDAR_TIME_ZONE },
-      })
-    }
-  }
-  return drafts.sort((a, b) => a.start.dateTime.localeCompare(b.start.dateTime) || a.key.localeCompare(b.key))
+  return workIntervals(marks).filter(item => item.date.startsWith(month + '-') && !item.incomplete).map(({ incomplete, ...item }) => ({
+    ...item,
+    summary: item.kind === 'home' ? `Koduvalve · ${item.raw}` : item.hours === 24 ? 'Рабочая смена · 24 ч' : `Работа · ${String(item.hours).replace('.', ',')} ч`,
+    description: `Создано PWA «Мои смены» из локального PDF. ${deltaNumber} · код ${item.raw}.`,
+  }))
 }
 
 export function draftSignature(draft: CalendarEventDraft) {
@@ -129,7 +85,9 @@ export function auditRemoteEvent(sync: CalendarMonthSync, event: SyncedCalendarE
 }
 
 export async function auditCalendarSync(sync: CalendarMonthSync, gateway: CalendarGateway): Promise<RemoteAudit[]> {
-  return Promise.all(Object.values(sync.events).map(async event => auditRemoteEvent(sync, event, await gateway.get(event.eventId))))
+  const events = Object.values(sync.events), result: RemoteAudit[] = []
+  for (let i = 0; i < events.length; i += 4) result.push(...await Promise.all(events.slice(i, i + 4).map(async event => auditRemoteEvent(sync, event, await gateway.get(event.eventId)))))
+  return result
 }
 
 export type ApplySyncOptions = {
@@ -143,6 +101,7 @@ export type ApplySyncOptions = {
   accountProfileId?: string
   reminders?: CalendarReminderSettings
   now?: number
+  checkpoint?: (sync: CalendarMonthSync) => Promise<void>
 }
 
 export async function applyCalendarSync(options: ApplySyncOptions): Promise<CalendarMonthSync> {
@@ -150,8 +109,10 @@ export async function applyCalendarSync(options: ApplySyncOptions): Promise<Cale
   const appliedReminderSignature = reminderSignature(reminders)
   const plan = planCalendarSync(desired, previous)
   const auditByKey = new Map(audits.map(audit => [audit.key, audit]))
+  if (Object.values(previous?.events || {}).some(event => !auditByKey.has(event.draft.key))) throw new Error('Не все события проверены. Повторите проверку Google Calendar.')
   const changedKeys = new Set(plan.changed.map(item => item.after.key))
-  const next: Record<string, SyncedCalendarEvent> = {}
+  const next: Record<string, SyncedCalendarEvent> = { ...previous?.events }
+  const checkpoint = () => options.checkpoint?.({ id: calendarSyncId(month, deltaNumber, accountProfileId), month, deltaNumber, accountProfileId, events: { ...next }, syncedAt: previous?.syncedAt, lastError: 'api' })
   for (const draft of desired) {
     const old = previous?.events[draft.key]
     const audit = old ? auditByKey.get(draft.key) : undefined
@@ -169,10 +130,13 @@ export async function applyCalendarSync(options: ApplySyncOptions): Promise<Cale
       continue
     }
     next[draft.key] = { eventId: remote.id, draft, etag: remote.etag, updated: remote.updated, reminderSignature: appliedReminderSignature }
+    await checkpoint()
   }
   for (const old of plan.removed) {
     const audit = auditByKey.get(old.draft.key)
     if (audit?.status === 'ok' || audit?.status === 'changed' || audit?.status === 'metadata') await gateway.remove(old.eventId, audit.remote?.etag)
+    delete next[old.draft.key]
+    await checkpoint()
   }
   return { id: calendarSyncId(month, deltaNumber, accountProfileId), month, deltaNumber, accountProfileId, syncedAt: options.now || Date.now(), events: next }
 }

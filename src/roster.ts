@@ -64,7 +64,15 @@ export function allMarksForDelta(months: MonthRecord[], deltaNumber: string): Da
   const raw = months.flatMap(month => candidateForMonth(month, deltaNumber)?.marks.map(migrateMark) || [])
   const normalizedWork = normalizeCrossMonth(raw.filter(isWorkMark).map<Shift>(mark => ({ date: mark.date, hours: mark.hours, code: mark.raw })))
     .map<WorkMark>(shift => ({ date: shift.date, kind: /^V\d/i.test(shift.code) ? 'home' : 'hours', raw: shift.code, hours: shift.hours }))
-  return [...normalizedWork, ...raw.filter(mark => !isWorkMark(mark))]
+  // Only a complete roster can establish uniqueness. Keep source marks intact.
+  const certain = new Set(months.filter(month => month.candidates?.length && month.rosterComplete !== false).flatMap(month => {
+    const last = new Date(Number(month.id.slice(0, 4)), Number(month.id.slice(5)), 0).getDate()
+    const date = `${month.id}-${last}`
+    const owners = month.candidates!.filter(candidate => candidate.marks.some(mark => mark.date === date && mark.kind === 'hours' && mark.raw === '16' && mark.hours === 16))
+    return owners.length === 1 && owners[0].number === deltaNumber ? [date] : []
+  }))
+  return [...normalizedWork.map(mark => certain.has(mark.date) && mark.kind === 'hours' && mark.raw === '16'
+    ? { ...mark, raw: '24', hours: 24 } : mark), ...raw.filter(mark => !isWorkMark(mark))]
 }
 
 export function marksForDate(months: MonthRecord[], deltaNumber: string, date: string): DayMark[] {

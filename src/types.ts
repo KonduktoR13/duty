@@ -65,6 +65,7 @@ export type MonthRecord = {
   // All locally parsed rows are retained so the user can switch D-number and
   // inspect colleagues without uploading or reparsing the PDF online.
   candidates?: Candidate[]
+  rosterComplete?: boolean
   leaveDates?: string[]
   leaveCodes?: Record<string, LeaveCode>
   deltaNumber: string

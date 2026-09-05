@@ -35,7 +35,7 @@ export function prepareGoogleIdentityServices() {
     script.async = true
     script.defer = true
     script.onload = () => resolve()
-    script.onerror = () => reject(new GoogleAuthError('Не удалось загрузить Google Identity Services'))
+    script.onerror = () => { script.remove(); scriptPromise = undefined; reject(new GoogleAuthError('Не удалось загрузить Google Identity Services. Попробуйте ещё раз.')) }
     document.head.append(script)
   })
   return scriptPromise
@@ -103,21 +103,28 @@ export async function revokeGoogleAccess() {
   await new Promise<void>(resolve => window.google!.accounts.oauth2.revoke(token, resolve))
 }
 
-async function api(path: string, init: RequestInit = {}, allowMissing = false) {
+async function api(path: string, init: RequestInit = {}, allowMissing = false, attempt = 0): Promise<unknown> {
   const token = await requestGoogleToken('')
   let response: Response
   try {
     response = await fetch(`https://www.googleapis.com/calendar/v3${path}`, {
       ...init,
+      signal: AbortSignal.timeout(30_000),
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', ...(init.headers || {}) },
     })
-  } catch {
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'TimeoutError') throw new GoogleApiError('Google долго не отвечает. Повторите проверку; уже выполненные действия сохранены.', 408)
     throw new TypeError('offline')
   }
   if (allowMissing && (response.status === 404 || response.status === 410)) return null
   if (response.status === 401) {
     access = undefined
     throw new GoogleAuthError('Google требует повторную авторизацию')
+  }
+  if ((response.status === 429 || response.status >= 500) && attempt < 2) {
+    const retryAfter = Number(response.headers.get('Retry-After'))
+    await new Promise(resolve => setTimeout(resolve, Math.min(5000, Math.max(500 * 2 ** attempt, Number.isFinite(retryAfter) ? retryAfter * 1000 : 0))))
+    return api(path, init, allowMissing, attempt + 1)
   }
   if (!response.ok) {
     const body = await response.json().catch(() => ({})) as { error?: { message?: string } }

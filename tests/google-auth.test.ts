@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { calendarSyncId, syncForAccount } from '../src/calendar-sync'
 import { resolveGoogleAccountProfile, resolveGoogleEmailProfile } from '../src/google-account'
-import { clearGoogleAccessToken, getGoogleAccountEmail, GOOGLE_EMAIL_SCOPE, GOOGLE_SCOPE, requestGoogleToken, setGoogleLoginHint } from '../src/google-calendar'
+import { clearGoogleAccessToken, getGoogleAccountEmail, GOOGLE_EMAIL_SCOPE, GOOGLE_SCOPE, requestGoogleToken, setGoogleLoginHint, prepareGoogleIdentityServices } from '../src/google-calendar'
 import type { CalendarMonthSync } from '../src/types'
 
 type Prompt = '' | 'select_account'
@@ -40,6 +40,14 @@ beforeEach(() => {
 })
 
 describe('Google OAuth account UX', () => {
+  it('allows retrying a failed identity-services script load', async () => {
+    vi.stubGlobal('window',{})
+    let created=0
+    vi.stubGlobal('document',{createElement:()=>({remove:()=>{}}),head:{append:(script:{onerror:()=>void;onload:()=>void})=>{queueMicrotask(()=>created++ ? script.onload():script.onerror())}}})
+    await expect(prepareGoogleIdentityServices()).rejects.toThrow('Не удалось загрузить')
+    await expect(prepareGoogleIdentityServices()).resolves.toBeUndefined()
+    expect(created).toBe(2)
+  })
   it('uses prompt empty and the saved email after both restart and refresh', async () => {
     const prompts: Prompt[] = []
     const configPrompts: Prompt[] = []

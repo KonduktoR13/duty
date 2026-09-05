@@ -11,8 +11,8 @@ export function normalizeCrossMonth(raw: Shift[]): Shift[] {
     const nextKey = localDateId(next)
     const isFirst = date.getDate() === 1
     const isLast = new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate() === date.getDate()
-    const prev = raw.find(item => item.date === prevKey)
-    const following = raw.find(item => item.date === nextKey)
+    const prev = raw.find(item => item.date === prevKey && item.code === '16' && item.hours === 16)
+    const following = raw.find(item => item.date === nextKey && item.code === '8')
     if (isFirst && /^8$/i.test(shift.code) && prev && prev.hours === 16 && /^16$/i.test(prev.code) && prev.date.slice(8) === String(new Date(previous.getFullYear(), previous.getMonth()+1, 0).getDate()).padStart(2, '0')) return []
     return [isLast && shift.hours === 16 && /^16$/i.test(shift.code) && following && /^8$/i.test(following.code) ? { ...shift, hours: 24, code: '24' } : shift]
   })

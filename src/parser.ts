@@ -18,9 +18,16 @@ const monthWords: [number, string[]][] = [
 
 export function detectMonth(text: string): string | null {
   const lower = text.toLowerCase()
-  const year = lower.match(/20\d{2}/)?.[0]
-  const month = monthWords.find(([, words]) => words.some(word => lower.includes(word)))?.[0]
-  return year && month ? `${year}-${String(month).padStart(2, '0')}` : null
+  const found = monthWords.flatMap(([month, words]) => words.flatMap(word => {
+    const match = lower.match(new RegExp(`(?:^|[^\\p{L}])${word}[\\p{L}]*[\\s,.-]+(20\\d{2})(?!\\d)`, 'u'))
+    return match ? [`${match[1]}-${String(month).padStart(2, '0')}`] : []
+  }))
+  const unique = [...new Set(found)]
+  if (unique.length === 1) return unique[0]
+  if (unique.length > 1) return null
+  const years = [...new Set(lower.match(/20\d{2}/g) || [])]
+  const months = monthWords.filter(([, words]) => words.some(word => new RegExp(`(?:^|[^\\p{L}])${word}`, 'u').test(lower)))
+  return years.length === 1 && months.length === 1 ? `${years[0]}-${String(months[0][0]).padStart(2, '0')}` : null
 }
 
 function makeRows(glyphs: Glyph[]): TableRow[] {
@@ -185,24 +192,30 @@ export function parseGlyphs(glyphs: Glyph[], plainText: string): ParsedSchedule 
       shifts,
       leaveDates: leaveMarks.map(mark => mark.date),
       leaveCodes,
-      confidence: marks.length ? 'high' : 'review',
+      confidence: marks.length && !marks.some(mark => mark.kind === 'other') ? 'high' : 'review',
     }
   })
   if (!candidates.length) throw new Error('В таблице не найдены Delta/D-номера')
-  return { month, candidates, warnings: candidates.some(candidate => candidate.confidence === 'review') ? ['Некоторые строки требуют проверки: в них нет распознанных отметок.'] : [] }
+  return { month, candidates, warnings: candidates.some(candidate => candidate.confidence === 'review') ? ['Есть пустые строки или неизвестные коды. Проверьте выбранный номер перед сохранением.'] : [] }
 }
 
 export async function parsePdf(file: File): Promise<ParsedSchedule> {
+  if (file.size > 20 * 1024 * 1024) throw new Error('PDF больше 20 МБ. Выберите месячный график меньшего размера.')
   const data = new Uint8Array(await file.arrayBuffer())
-  const document = await pdfjs.getDocument({ data }).promise
+  if (!new TextDecoder().decode(data.slice(0, 1024)).includes('%PDF-')) throw new Error('Это не PDF. Выберите оригинальный PDF-график.')
+  const task = pdfjs.getDocument({ data })
+  try {
+  const document = await task.promise
   const page = await document.getPage(1)
   const content = await page.getTextContent()
   const glyphs: Glyph[] = content.items
     .filter((item): item is typeof item & { str: string; transform: number[]; width: number } => 'str' in item)
     .map(item => ({ text: item.str, x: item.transform[4], y: item.transform[5], width: item.width }))
-  const text = (await Promise.all(Array.from({ length: document.numPages }, async (_, index) => {
-    const pageText = await (await document.getPage(index + 1)).getTextContent()
-    return pageText.items.map(item => 'str' in item ? item.str : '').join(' ')
-  }))).join(' ')
+  if (!glyphs.length) throw new Error('В PDF нет текста: вероятно, это скан. Нужен исходный PDF с текстовой таблицей.')
+  const text = content.items.map(item => 'str' in item ? item.str : '').join(' ')
   return parseGlyphs(glyphs, text)
+  } catch (error) {
+    if (error instanceof Error && error.name === 'PasswordException') throw new Error('PDF защищён паролем. Сохраните незашифрованную копию графика и повторите импорт.')
+    throw error
+  } finally { await task.destroy() }
 }

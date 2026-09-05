@@ -1,18 +1,23 @@
 import { registerSW } from 'virtual:pwa-register'
 import { storage } from './db'
-import { parsePdf } from './parser'
-import { allMarksForDelta, candidateForMonth, candidatesForMonth, foreignEntriesByDate, isWorkMark, knownDeltaNumbers, migrateMark, type ForeignDayEntry, type WorkMark } from './roster'
+const parsePdf = async (file: File) => (await import('./parser')).parsePdf(file)
+import { nextWork, intervalTime, tallinnWallTime } from './intervals'
+import { esc, icon, openDialog as open, closeDialog, localError, run, dialogBusy } from './ui'
+import { allMarksForDelta, candidateForMonth, candidatesForMonth, isWorkMark, knownDeltaNumbers, migrateMark, type ForeignDayEntry } from './roster'
 import { applyCalendarSync, auditCalendarSync, buildCalendarDrafts, calendarSyncId, planCalendarSync, syncForAccount, syncSummary, type RemoteAudit } from './calendar-sync'
 import { calendarRemindersLabel, normalizeCalendarReminders, reminderOffsetLabel, reminderSignature } from './calendar-reminders'
 import { clearGoogleAccessToken, deterministicGoogleEventId, discoverDutyAccounts, getGoogleAccountEmail, GoogleApiError, GoogleAuthError, googleCalendarGateway, hasLiveGoogleToken, patchGoogleEventReminders, prepareGoogleIdentityServices, requestGoogleToken, revokeGoogleAccess, setGoogleLoginHint } from './google-calendar'
 import { createGoogleAccountProfileId, googleEmailKey, resolveGoogleEmailProfile } from './google-account'
-import { humanMonth, timeLabel } from './schedule'
-import { analyzeMonth, type AnalysisCheck } from './month-analysis'
+import { humanMonth } from './schedule'
+import { analysisView } from './analysis-view'
+import { importReview } from './import-review'
+import { documentsView } from './documents-view'
+import { createCalendarView } from './calendar-view'
 import type { CalendarMonthSync, CalendarReminderSettings, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
 import './style.css'
 import './interaction.css'
+import './experience.css'
 
-type UpcomingDay = { date: string; marks: WorkMark[] }
 type PreparedMonthTransition = {
   calendar: HTMLElement
   track: HTMLElement
@@ -31,6 +36,7 @@ let selectedDate: string | null = null
 type AppSection = 'calendar' | 'analysis' | 'documents'
 let section: AppSection = 'calendar'
 let pending: { file: File; parsed: ParsedSchedule } | null = null
+function close() { pending = null; closeDialog() }
 let applyUpdate: ((reloadPage?: boolean) => Promise<void>) | undefined
 let monthTransitioning = false
 let calendarGestureActive = false
@@ -41,11 +47,12 @@ let googleSettings: GoogleIntegrationSettings = { enabled: false }
 let highlightSyncOffer = false
 let legendExpanded = false
 let lastRenderedSection: AppSection = section
+let calendarMode: 'grid' | 'list' = 'grid'
+let showColleagues = false
+let revisions = new Set<string>()
 
 const localDateId = (value = new Date()) => [value.getFullYear(), String(value.getMonth() + 1).padStart(2, '0'), String(value.getDate()).padStart(2, '0')].join('-')
-const todayId = () => localDateId()
-const esc = (value: string) => value.replace(/[&<>"]/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[char]!))
-const displayCode = (mark: Pick<WorkMark, 'raw'> | DayMark) => mark.raw === '16+8' ? '24' : mark.raw
+const todayId = () => tallinnWallTime().slice(0, 10)
 const hoursText = (hours: number) => `${String(hours).replace('.', ',')} ч`
 
 function blankMonth(id: string): MonthRecord {
@@ -64,11 +71,7 @@ function groupMarks(marks: DayMark[]) {
   return grouped
 }
 
-function upcomingDay(): UpcomingDay | undefined {
-  const work = allMarks().filter(isWorkMark).filter(mark => mark.date >= todayId()).sort((a, b) => a.date.localeCompare(b.date))
-  const date = work[0]?.date
-  return date ? { date, marks: work.filter(mark => mark.date === date) } : undefined
-}
+function upcomingDay() { return nextWork(allMarks()) }
 
 async function refresh() {
   ;[months, calendarSyncs, googleSettings] = await Promise.all([
@@ -76,6 +79,7 @@ async function refresh() {
     storage.syncs(),
     storage.setting<GoogleIntegrationSettings>('googleIntegration').then(value => value || { enabled: false }),
   ])
+  revisions = new Set((await Promise.all(months.map(async month => await storage.revision(month.id) ? month.id : ''))).filter(Boolean))
   if (!googleSettings.accountProfileId && (googleSettings.enabled || calendarSyncs.length)) {
     const accountProfileId = createGoogleAccountProfileId()
     googleSettings = {
@@ -113,7 +117,7 @@ async function refresh() {
       try {
         const parsed = await parsePdf(pdf as File)
         const candidate = parsed.candidates.find(item => item.number === currentDelta) || parsed.candidates.find(item => item.number === month.deltaNumber) || parsed.candidates[0]
-        await storage.put({ ...month, candidates: parsed.candidates, marks: candidate.marks, shifts: candidate.shifts, leaveDates: candidate.leaveDates, leaveCodes: candidate.leaveCodes })
+        await storage.put({ ...month, rosterComplete: true, candidates: parsed.candidates, marks: candidate.marks, shifts: candidate.shifts, leaveDates: candidate.leaveDates, leaveCodes: candidate.leaveCodes })
         upgraded = true
         continue
       } catch {
@@ -122,7 +126,7 @@ async function refresh() {
     }
     const fallback = candidatesForMonth(month)
     if (fallback.length) {
-      await storage.put({ ...month, candidates: fallback })
+      await storage.put({ ...month, candidates: fallback, rosterComplete: false })
       upgraded = true
     } else if (!pdf) {
       legacyNeedsReimport.push(month.id)
@@ -133,20 +137,25 @@ async function refresh() {
     currentDelta = knownDeltaNumbers(months)[0] || ''
     if (currentDelta) await storage.set('deltaNumber', currentDelta)
   }
-  if (!selected || !months.some(month => month.id === selected)) selected = months[0]?.id || ''
+  if (!selected) selected = months.find(month => month.id === todayId().slice(0, 7))?.id || months[0]?.id || todayId().slice(0, 7)
   selectedDate = null
   render()
 }
 
 function render() {
+  const focused = document.activeElement as HTMLElement | null
+  const focusId = focused?.id
+  const focusDay = focused?.dataset.day
+  const focusAgenda = focused?.dataset.agendaDay
+  const focusSection = focused?.dataset.section
   const previousScroll = document.querySelector<HTMLElement>('.app-content')?.scrollTop || 0
   const restoreScroll = lastRenderedSection === section ? previousScroll : 0
   lastRenderedSection = section
   const current = months.find(month => month.id === selected) || blankMonth(selected)
   const mainContent = section === 'documents'
-    ? documentsView()
+    ? documentsView(months, currentDelta, revisions)
     : section === 'analysis'
-      ? analysisView(current)
+      ? analysisView(current, months, currentDelta)
       : !months.length
         ? welcome()
         : hero(upcomingDay()) + legacyNotice() + monthView(current)
@@ -162,11 +171,26 @@ function render() {
     mainContent + '</main><nav class="tabs" aria-label="Разделы"><button data-section="calendar" class="' +
     (section === 'calendar' ? 'active' : '') + '">▣<span>Календарь</span></button><button data-section="analysis" class="' +
     (section === 'analysis' ? 'active' : '') + '">◔<span>Анализ</span></button><button data-section="documents" class="' +
-    (section === 'documents' ? 'active' : '') + '">▤<span>Графики</span></button></nav></div><input id="file" type="file" accept="application/pdf,.pdf" hidden><dialog id="dialog"></dialog>'
+    (section === 'documents' ? 'active' : '') + '">▤<span>Графики</span></button></nav></div><input id="file" type="file" accept="application/pdf,.pdf" hidden>'
   bind()
+  document.querySelectorAll<HTMLButtonElement>('[data-section]').forEach(button => {
+    if (button.dataset.section === section) button.setAttribute('aria-current', 'page')
+    button.innerHTML = icon(button.dataset.section!) + '<span>' + ({ calendar: 'Календарь', analysis: 'Анализ', documents: 'Графики' }[button.dataset.section!] || '') + '</span>'
+  })
+  const settings = document.querySelector('#settings')!
+  settings.innerHTML = icon('settings')
+  document.querySelector('.brand>span')!.innerHTML = icon('calendar')
+  if (currentDelta) {
+    const delta = document.createElement('button'); delta.className = 'delta-chip'; delta.id = 'header-delta'; delta.textContent = currentDelta + ' ▾'; delta.setAttribute('aria-label', 'Выбран ' + currentDelta + '. Сменить номер'); delta.onclick = showDeltaSettings; settings.before(delta)
+  }
+  document.querySelectorAll<HTMLElement>('[data-night]').forEach(bar => bar.style.setProperty('--night', bar.dataset.night + '%'))
   requestAnimationFrame(() => {
     const content = document.querySelector<HTMLElement>('.app-content')
     if (content) content.scrollTop = restoreScroll
+    if (!document.querySelector('#dialog[open]')) {
+      const target = focusDay ? document.querySelector<HTMLElement>('[data-day="' + focusDay + '"]') : focusAgenda ? document.querySelector<HTMLElement>('[data-agenda-day="' + focusAgenda + '"]') : focusSection ? document.querySelector<HTMLElement>('[data-section="' + focusSection + '"]') : focusId ? document.getElementById(focusId) : null
+      target?.focus({ preventScroll: true })
+    }
   })
 }
 
@@ -174,14 +198,12 @@ function welcome() {
   return '<section class="welcome"><div class="shield">⌂</div><h2>Ваш график остаётся вашим</h2><p>PDF обрабатывается прямо в браузере и сохраняется только на этом устройстве. Мы не отправляем файл, смены или Delta-номер на сервер.</p><button class="primary" id="import">Выбрать PDF-график</button><small>Поддерживаются месячные PDF Delta. Интернет для импорта не нужен после установки.</small><nav class="legal-links" aria-label="Правовая информация"><a href="privacy/" target="_blank" rel="noopener">Политика конфиденциальности</a><a href="terms/" target="_blank" rel="noopener">Условия использования</a></nav></section>'
 }
 
-function hero(upcoming: UpcomingDay | undefined) {
-  if (!upcoming) return '<section class="hero hero-empty"><div class="hero-copy"><p>Ближайшая смена</p><h2>Нет подтверждённых смен</h2><span>Возможные выходы с # остаются отмечены в календаре.</span></div></section>'
-  const codes = upcoming.marks.map(displayCode).join(' + ')
-  const label = upcoming.marks.length === 1 && upcoming.marks[0].kind === 'hours' && upcoming.marks[0].hours === 24
-    ? '24 ч'
-    : codes
-  const description = upcoming.marks.map(mark => markDescription(mark, true)).join(' · ')
-  return '<section class="hero"><div class="hero-copy"><p>Ближайшая смена</p><h2>' + date(upcoming.date) + '</h2><span>' + esc(description) + '</span></div><strong class="hero-code">' + esc(label) + '</strong></section>'
+function hero(upcoming: ReturnType<typeof upcomingDay>) {
+  if (!upcoming) return '<section class="hero hero-empty"><div class="hero-copy"><p>Следующая смена</p><h2>Нет будущих смен</h2><span>Добавьте следующий PDF в разделе «Графики».</span></div></section>'
+  const first = upcoming.intervals[0]
+  const label = upcoming.intervals.map(item => hoursText(item.hours)).join(' + ')
+  const description = upcoming.intervals.map(item => intervalTime(item) + (item.kind === 'home' ? ' · дома' : '')).join(' · ')
+  return '<button class="hero" id="hero-day" data-target-date="' + first.date + '"><div class="hero-copy"><p>' + (upcoming.active ? 'Сейчас на смене' : 'Следующая смена') + '</p><h2>' + (first.date === todayId() ? 'Сегодня' : date(first.date)) + '</h2><span>' + esc(description) + '</span><small>Код ' + esc(first.raw) + ' · время Таллина</small></div><strong class="hero-code">' + esc(label) + '</strong></button>'
 }
 
 function legacyNotice() {
@@ -190,144 +212,9 @@ function legacyNotice() {
   return '<aside class="legacy-notice"><b>Нужен повторный импорт PDF</b><span>Для ' + esc(names) + ' старая версия не сохранила оригинал. Откройте вкладку «Графики» и загрузите PDF ещё раз, чтобы распознать LHPu, V-коды и другие отметки.</span></aside>'
 }
 
-function isMonthBoundaryPart(mark: DayMark) {
-  if (mark.kind !== 'hours' || mark.hours !== 16 || !/^16$/i.test(mark.raw)) return false
-  const value = new Date(mark.date + 'T12:00:00')
-  return value.getDate() === new Date(value.getFullYear(), value.getMonth() + 1, 0).getDate()
-}
-
-function markDescription(mark: DayMark, compact = false) {
-  if (mark.kind === 'leave') return mark.raw === 'LHPu' ? 'Отпуск по уходу за ребёнком' : 'Отпуск'
-  if (mark.kind === 'tentative') return compact
-    ? `${mark.raw} · возможный выход`
-    : `Возможный выход на работу · ${hoursText(mark.hours)} · ещё не подтверждён`
-  if (mark.kind === 'other') return compact ? `Код ${mark.raw}` : `Прочая отметка из PDF · код ${mark.raw}`
-  if (mark.kind === 'home') return compact
-    ? `${mark.raw} · дома`
-    : `Домашнее дежурство (koduvalve) · ${hoursText(mark.hours)} · код ${mark.raw}`
-  if (mark.hours === 24) return compact
-    ? 'Суточная смена · 24 ч'
-    : `Суточная смена · ${timeLabel({ date: mark.date, hours: mark.hours, code: mark.raw })} · код 24`
-  if (mark.hours === 12) return compact
-    ? '12 ч на месте'
-    : 'Дневной график · 12 ч на месте 08:00–20:00 · код 12'
-  if (isMonthBoundaryPart(mark)) return compact
-    ? '16 ч · часть смены на границе месяца'
-    : 'Часть смены на границе месяца · в этом PDF указано 16 ч; продолжение сверяется со следующим месяцем'
-  return compact ? `${hoursText(mark.hours)} · код ${mark.raw}` : `${hoursText(mark.hours)} · код графика ${mark.raw}`
-}
-
-function foreignMarkDescription(mark: DayMark, marks: DayMark[], deltaNumber: string) {
-  if (!isWorkMark(mark)) return markDescription(mark)
-  const draft = buildCalendarDrafts(mark.date.slice(0, 7), deltaNumber, marks).find(item => item.raw === mark.raw && item.kind === mark.kind)
-  if (!draft) return markDescription(mark)
-  const start = draft.start.dateTime.slice(11, 16)
-  const end = draft.end.dateTime.slice(11, 16)
-  const nextDay = draft.start.dateTime.slice(0, 10) !== draft.end.dateTime.slice(0, 10)
-  const type = mark.kind === 'home' ? 'Домашнее дежурство (koduvalve)' : mark.hours === 24 ? 'Суточная смена' : 'Рабочая отметка'
-  return `${type} · код ${mark.raw} · ${start}–${end}${nextDay ? ' следующего дня' : ''}`
-}
-
-function foreignEntriesHtml(entries: ForeignDayEntry[], ownDay: boolean) {
-  if (!entries.length) return ownDay
-    ? '<section class="coworkers-block empty"><b>Других смен нет</b><span>В исходном графике на это время другие D-номера не найдены.</span></section>'
-    : ''
-  const heading = ownDay
-    ? 'Другие на работе · ' + entries.length
-    : entries.length > 1 ? 'Другие D-номера · ' + entries.length : 'Другой D-номер · ' + esc(entries[0].deltaNumber)
-  const note = ownDay
-    ? '<span class="not-yours">Не ваши смены</span>'
-    : '<span class="not-yours">У вас смены нет · показаны другие сотрудники</span>'
-  const rows = entries.map(entry => '<section class="foreign-entry"><strong>' + esc(entry.deltaNumber) + '</strong><div class="detail-lines">' + entry.marks.map(mark => '<div class="detail-line ' + mark.kind + '"><i></i><div><b>' + esc(displayCode(mark)) + '</b><span>' + esc(foreignMarkDescription(mark, entry.marks, entry.deltaNumber)) + '</span></div></div>').join('') + '</div></section>').join('')
-  return '<section class="coworkers-block' + (ownDay ? ' alongside-own' : '') + '"><div class="coworkers-heading"><b class="foreign-title">' + heading + '</b>' + note + '</div><div class="foreign-entries">' + rows + '</div></section>'
-}
-
-function dayTone(marks: DayMark[]) {
-  const has24 = marks.some(mark => mark.kind === 'hours' && mark.hours === 24)
-  const hasBoundary = marks.some(isMonthBoundaryPart)
-  const hasDay = marks.some(mark => mark.kind === 'hours' && mark.hours !== 24 && !isMonthBoundaryPart(mark))
-  const hasTentative = marks.some(mark => mark.kind === 'tentative')
-  const hasHome = marks.some(mark => mark.kind === 'home')
-  const hasOther = marks.some(mark => mark.kind === 'other')
-  const leave = marks.find((mark): mark is Extract<DayMark, { kind: 'leave' }> => mark.kind === 'leave')
-  if (has24 && hasHome) return 'mixed-duty-home'
-  if (hasDay && hasHome) return 'mixed-day-home'
-  if (hasTentative && hasHome) return 'mixed-tentative-home'
-  if (hasDay && hasTentative) return 'mixed-day-tentative'
-  if (has24) return 'duty-24'
-  if (hasBoundary) return 'boundary-shift'
-  if (hasDay) return 'day-schedule'
-  if (hasTentative) return 'tentative-shift'
-  if (hasHome && hasOther) return 'mixed-home-other'
-  if (hasHome) return 'home-duty'
-  if (leave?.raw === 'LHPu') return 'leave-childcare'
-  if (leave) return 'leave-vacation'
-  return hasOther ? 'other-code' : ''
-}
-
-function dayAria(dateKey: string, marks: DayMark[]) {
-  return `${date(dateKey)}: ${marks.map(mark => markDescription(mark)).join('; ')}`
-}
-
-function calendarPage(month: MonthRecord, marksByDate: Map<string, DayMark[]>, suppliedForeign?: Map<string, ForeignDayEntry[]>) {
-  const currentDay = todayId()
-  const value = new Date(month.id + '-01T12:00:00')
-  const offset = (value.getDay() + 6) % 7
-  const totalDays = new Date(value.getFullYear(), value.getMonth() + 1, 0).getDate()
-  const foreignByDate = suppliedForeign || foreignEntriesByDate(months, month.id, currentDelta)
-  const cells: string[] = Array.from({ length: offset }, () => '<i class="day-blank" aria-hidden="true"></i>')
-  for (let day = 1; day <= totalDays; day++) {
-    const dateKey = month.id + '-' + String(day).padStart(2, '0')
-    const marks = marksByDate.get(dateKey) || []
-    const hasColleagues = !marks.length && (foreignByDate.get(dateKey)?.length || 0) > 0
-    if (!marks.length) {
-      const label = hasColleagues ? `${date(dateKey)}: есть смены других D-номеров` : `${date(dateKey)}: нет смен`
-      cells.push('<button class="day day-empty ' + (hasColleagues ? 'has-colleagues ' : '') + (selectedDate === dateKey ? 'selected ' : '') + (dateKey === currentDay ? 'today' : '') + '" data-day="' + dateKey + '"' + (dateKey === currentDay ? ' aria-current="date"' : '') + ' aria-label="' + esc(label) + '"><b>' + day + '</b>' + (hasColleagues ? '<i class="colleague-dot" aria-hidden="true"></i>' : '') + '</button>')
-      continue
-    }
-    const regularCodes = marks.filter(mark => mark.kind !== 'home').map(displayCode)
-    const homeCodes = marks.filter((mark): mark is WorkMark => mark.kind === 'home').map(displayCode)
-    const code = marks.map(displayCode).join('+')
-    const codeHtml = regularCodes.length && homeCodes.length
-      ? '<small>' + esc(regularCodes.join('+')) + '</small><em class="home-badge">' + esc(homeCodes.join('+')) + '</em>'
-      : '<small>' + esc(code) + '</small>'
-    const classes = ['day', dayTone(marks), selectedDate === dateKey ? 'selected' : '', dateKey === currentDay ? 'today' : ''].filter(Boolean).join(' ')
-    cells.push('<button class="' + classes + '" data-day="' + dateKey + '"' + (dateKey === currentDay ? ' aria-current="date"' : '') + ' aria-label="' + esc(dayAria(dateKey, marks)) + '"><b>' + day + '</b>' + codeHtml + '</button>')
-  }
-  while (cells.length < 42) cells.push('<i class="day-blank" aria-hidden="true"></i>')
-  return '<div class="calendar-page" data-month="' + month.id + '"><div class="grid">' + cells.join('') + '</div></div>'
-}
-
-function selectedDetails(marksByDate: Map<string, DayMark[]>, month: MonthRecord, foreignByDate: Map<string, ForeignDayEntry[]>) {
-  if (!selectedDate) return ''
-  const marks = marksByDate.get(selectedDate) || []
-  if (!marks.length) {
-    const entries = foreignByDate.get(selectedDate) || []
-    const content = entries.length
-      ? foreignEntriesHtml(entries, false)
-      : '<b>Нет смен</b><span class="empty-detail">В исходном графике на этот день рабочих отметок нет.</span>'
-    return '<section class="shift-details ' + (entries.length ? 'foreign-details' : 'empty-details') + '" id="shift-details" aria-label="Информация за ' + esc(date(selectedDate)) + '"><i class="detail-handle" aria-hidden="true"></i><div class="detail-icon">' + (entries.length ? 'D' : '—') + '</div><div class="detail-content"><small>' + date(selectedDate) + '</small>' + content + '</div><button class="detail-close" id="detail-close" aria-label="Закрыть информацию о дне">×</button></section>'
-  }
-  const hasHome = marks.some(mark => mark.kind === 'home')
-  const onlyHome = hasHome && marks.every(mark => mark.kind === 'home' || mark.kind === 'other')
-  const onlyLeave = marks.every(mark => mark.kind === 'leave')
-  const onlyOther = marks.every(mark => mark.kind === 'other')
-  const onlyTentative = marks.every(mark => mark.kind === 'tentative')
-  const icon = onlyLeave ? '☼' : onlyHome ? '⌂' : onlyTentative ? '?' : onlyOther ? '⋯' : '◷'
-  const lines = marks.map(mark => '<div class="detail-line ' + mark.kind + '"><i></i><div><b>' + esc(displayCode(mark)) + '</b><span>' + esc(markDescription(mark)) + '</span></div></div>').join('')
-  const entries = foreignByDate.get(selectedDate) || []
-  return '<section class="shift-details" id="shift-details" aria-label="Информация за ' + esc(date(selectedDate)) + '"><i class="detail-handle" aria-hidden="true"></i><div class="detail-icon">' + icon + '</div><div class="detail-content"><b>' + date(selectedDate) + '</b><span class="own-shift-label">Ваша смена</span><div class="detail-lines">' + lines + '</div>' + foreignEntriesHtml(entries, true) + '</div><button class="detail-close" id="detail-close" aria-label="Закрыть информацию о дне">×</button></section>'
-}
-
-function monthView(month: MonthRecord) {
-  const marksByDate = groupMarks(allMarks())
-  const foreignByDate = foreignEntriesByDate(months, month.id, currentDelta)
-  return '<section class="calendar-group"><nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav><section class="calendar" id="calendar"><div class="week">' +
-    ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map(day => '<span>' + day + '</span>').join('') +
-    '</div><div class="calendar-viewport" id="calendar-viewport"><div class="calendar-track" id="calendar-track">' + calendarPage(month, marksByDate, foreignByDate) +
-    '</div></div><div class="legend-section"><button class="legend-toggle" id="legend-toggle" aria-expanded="' + legendExpanded + '" aria-controls="calendar-legend"><span>Легенда</span><small>7 обозначений</small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' + (legendExpanded ? ' expanded' : '') + '" id="calendar-legend"><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></div></div></section></section>' + calendarSyncCard(month) +
-    selectedDetails(marksByDate, month, foreignByDate)
-}
+function calendarView() { return createCalendarView({ months, currentDelta, selectedDate, legendExpanded, showColleagues, calendarMode, allMarks, groupMarks, todayId, date, calendarSyncCard }) }
+function monthView(month: MonthRecord) { return calendarView().monthView(month) }
+function calendarPage(month: MonthRecord, marks: Map<string, DayMark[]>, foreign?: Map<string, ForeignDayEntry[]>) { return calendarView().calendarPage(month, marks, foreign) }
 
 function syncFor(month: string, deltaNumber = currentDelta) {
   return syncForAccount(calendarSyncs, month, deltaNumber, googleSettings.accountProfileId)
@@ -400,49 +287,7 @@ function calendarSyncCard(month: MonthRecord) {
   return '<aside class="sync-card ' + tone + (highlightSyncOffer ? ' suggested' : '') + '"><div class="sync-mark">G</div><div class="sync-copy"><b>Google Calendar</b><span class="sync-status"><i></i>' + label + '</span><small title="' + esc(details) + '">' + esc(details) + '</small></div><div class="sync-actions"><button id="sync-month"' + (disabled ? ' disabled' : '') + '>' + action + '</button></div></aside>'
 }
 
-function documentsView() {
-  const rows = months.length
-    ? months.map(month => {
-      const candidate = candidateForMonth(month, currentDelta)
-      return '<article data-open-pdf="' + month.id + '" role="button" tabindex="0" aria-label="Открыть PDF ' + esc(month.fileName) + '"><div class="doc-icon">▤</div><div><b>' + humanMonth(month.id) + '</b><span>' + esc(month.fileName) + '</span><small>' + (candidate?.shifts.length || 0) + ' подтверждённых отметок для ' + esc(currentDelta) + ' · загружен ' + new Date(month.importedAt).toLocaleDateString('ru-RU') + '</small></div><button class="delete-month" data-delete-month="' + month.id + '" aria-label="Удалить ' + humanMonth(month.id) + '">⌫</button></article>'
-    }).join('')
-    : '<p>Графики ещё не импортированы.</p>'
-  return '<section class="documents-intro"><p>Оригинальные PDF и графики хранятся только на этом устройстве. Нажмите график, чтобы открыть его.</p><button class="primary" id="import">Импортировать PDF</button></section><h2 class="list-title">Загруженные графики</h2><section class="documents">' + rows + '</section><p class="documents-hint">Повторный импорт заменяет только соответствующий месяц и не создаёт дублей.</p>'
-}
 
-function formatAnalysisHours(value: number) {
-  return String(Math.round(value * 10) / 10).replace('.', ',') + ' ч'
-}
-
-function analysisRule(check: AnalysisCheck) {
-  const icon = check.tone === 'ok' ? '✓' : check.tone === 'attention' ? '!' : 'i'
-  const findings = check.findings?.length ? '<ul class="analysis-findings">' + check.findings.map(finding => '<li>' + esc(finding) + '</li>').join('') + '</ul>' : ''
-  return '<details class="analysis-rule ' + check.tone + '" id="analysis-' + check.id + '"' + (check.tone === 'attention' ? ' open' : '') + '><summary><i>' + icon + '</i><span><b>' + esc(check.title) + '</b><small>' + esc(check.value) + '</small></span><em>⌄</em></summary>' + findings + '<p>' + esc(check.explanation) + '</p></details>'
-}
-
-function issueCountLabel(count: number) {
-  const remainder = count % 100
-  const ending = remainder >= 11 && remainder <= 14 ? 'пунктов' : count % 10 === 1 ? 'пункт' : count % 10 >= 2 && count % 10 <= 4 ? 'пункта' : 'пунктов'
-  return `${count} ${ending} для проверки`
-}
-
-function analysisView(month: MonthRecord) {
-  const navigation = '<nav class="months analysis-months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' + humanMonth(month.id) + '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav>'
-  const source = months.find(item => item.id === month.id)
-  if (!months.length) return '<section class="analysis-empty"><div>◔</div><h2>Сначала добавьте график</h2><p>Анализ выполняется только на устройстве по данным импортированного PDF.</p><button class="primary" id="import">Импортировать PDF</button></section>'
-  if (!source || !candidateForMonth(source, currentDelta)) return navigation + '<section class="analysis-empty compact"><div>—</div><h2>Нет данных для ' + esc(currentDelta) + '</h2><p>Для ' + humanMonth(month.id) + ' график не загружен или в PDF нет выбранного D-номера.</p></section>'
-  const analysis = analyzeMonth(months, month.id, currentDelta)
-  const totalParts = analysis.homeDutyHours ? '<span>+ ' + formatAnalysisHours(analysis.homeDutyHours) + ' valveaeg отдельно</span>' : '<span>Рабочее время по графику</span>'
-  const tentative = analysis.tentativeHours ? '<p class="analysis-tentative">Возможные выходы # не включены: ' + formatAnalysisHours(analysis.tentativeHours) + '</p>' : ''
-  const leave = analysis.leaveDays ? '<div><b>' + analysis.leaveDays + '</b><span>дней с отпуском</span></div>' : ''
-  const boundary = (!analysis.hasPreviousMonth || !analysis.hasFollowingMonth) ? '<aside class="analysis-boundary"><b>Границы месяца видны не полностью</b><span>Для точной проверки отдыха загрузите также соседние месяцы.</span></aside>' : ''
-  const attention = analysis.checks.filter(check => check.tone === 'attention')
-  const issueLinks = attention.map(check => '<li><button class="analysis-jump" data-analysis-jump="analysis-' + check.id + '"><span>' + esc(check.title) + '</span><b>' + esc(check.value) + '</b><i>↓</i></button></li>').join('')
-  const verdict = attention.length
-    ? '<section class="analysis-verdict attention"><i>!</i><div><b>Найдено ' + issueCountLabel(attention.length) + '</b><span>Нажмите на причину — откроется точный расчёт.</span><ul class="analysis-issue-links">' + issueLinks + '</ul></div></section>'
-    : '<section class="analysis-verdict"><i>✓</i><div><b>В видимых данных отклонений не найдено</b><span>Проверены числовые условия, которые можно восстановить из PDF.</span></div></section>'
-  return navigation + '<div class="analysis-mode"><b>Päästeametnik · Demineerimiskeskus</b><span>Summeeritud tööajaarvestus</span></div><section class="analysis-summary"><small>' + esc(currentDelta) + ' · рабочее время</small><strong>' + formatAnalysisHours(analysis.workHours) + '</strong>' + totalParts + '<div class="hours-bar" aria-label="Дневные ' + formatAnalysisHours(analysis.dayHours) + ', ночные ' + formatAnalysisHours(analysis.nightHours) + '"><i style="--night:' + (analysis.workHours ? analysis.nightHours / analysis.workHours * 100 : 0) + '%"></i></div><div class="hours-key"><span><i class="day-hours"></i>Дневные 06–22 <b>' + formatAnalysisHours(analysis.dayHours) + '</b></span><span><i class="night-hours"></i>Ночные 22–06 <b>' + formatAnalysisHours(analysis.nightHours) + '</b></span></div></section><p class="analysis-context"><b>24 ч — оперативная смена.</b> Остальные отметки, обычно 8 или 12 ч, показаны как служебные рабочие дни: это могут быть обучение, учения или дни командировки. Точную причину PDF не кодирует.</p>' + tentative + '<section class="analysis-metrics"><div><b>' + analysis.operationalShiftCount + '</b><span>оперативных смен · 24 ч</span></div><div><b>' + analysis.workdayCount + '</b><span>служебных рабочих дней</span></div><div><b>' + formatAnalysisHours(analysis.homeDutyHours) + '</b><span>valveaeg · V</span></div>' + leave + '</section>' + boundary + verdict + '<section class="law-analysis"><header><div><small>Предварительная оценка · päästeametnik</small><h2>Служба и отдых по закону</h2></div><span>PäästeTS</span></header><p class="law-intro">Показаны только применимые к вашему графику правила. Откройте пункт, чтобы увидеть норму и расчёт простым языком.</p>' + analysis.checks.map(analysisRule).join('') + '<aside class="legal-disclaimer"><b>Важно</b><span>Расчёт предполагает, что выбранный D-номер относится к päästeametnik Demineerimiskeskus. Это справочная автоматическая оценка, не юридическое заключение. PDF не показывает фактические вызовы во время V, сверхурочную работу вне графика, оценку рисков и полный расчётный период.</span><a href="https://www.riigiteataja.ee/akt/P%C3%A4%C3%A4steTS" target="_blank" rel="noopener">Päästeteenistuse seadus ↗</a><a href="https://www.riigiteataja.ee/akt/ATS" target="_blank" rel="noopener">Avaliku teenistuse seadus ↗</a><small>Учтены специальные нормы PäästeTS §20 и действующая с 13.02.2026 редакция ATS §41.</small></aside></section>'
-}
 
 function date(value: string) {
   return new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', weekday: 'short' }).format(new Date(value + 'T12:00:00'))
@@ -455,6 +300,19 @@ function adjacent(direction: number) {
 }
 
 function bind() {
+  bindBackups()
+  document.querySelectorAll<HTMLButtonElement>('[data-restore-month]').forEach(button => button.onclick = () => {
+    const id = button.dataset.restoreMonth!
+    open('<h2>Вернуть предыдущий график?</h2><p>' + humanMonth(id) + '. События Google пока не изменятся. После возврата проверьте синхронизацию.</p><button class="primary" id="confirm-revision">Вернуть предыдущую версию</button><button id="cancel">Отмена</button>')
+    document.querySelector('#cancel')?.addEventListener('click', close)
+    document.querySelector('#confirm-revision')?.addEventListener('click', () => run(async () => { await storage.restoreRevision(id); close(); await refresh() }))
+  })
+  document.querySelector('#today')?.addEventListener('click', () => { selected = todayId().slice(0, 7); selectedDate = null; render() })
+  document.querySelector('#hero-day')?.addEventListener('click', event => { selectedDate = (event.currentTarget as HTMLElement).dataset.targetDate!; selected = selectedDate.slice(0, 7); render() })
+  document.querySelector('#grid-mode')?.addEventListener('click', () => { calendarMode = 'grid'; render(); run(() => storage.set('calendarMode', calendarMode)) })
+  document.querySelector('#list-mode')?.addEventListener('click', () => { calendarMode = 'list'; render(); run(() => storage.set('calendarMode', calendarMode)) })
+  document.querySelector('#show-colleagues')?.addEventListener('change', event => { showColleagues = (event.target as HTMLInputElement).checked; render(); run(() => storage.set('showColleagues', showColleagues)) })
+  document.querySelectorAll<HTMLElement>('[data-agenda-day]').forEach(button => button.onclick = () => selectDay(button.dataset.agendaDay!))
   document.querySelector('#import')?.addEventListener('click', () => document.querySelector<HTMLInputElement>('#file')!.click())
   document.querySelector('#file')?.addEventListener('change', onFile)
   document.querySelector('#prev')?.addEventListener('click', () => moveMonth(-1))
@@ -503,6 +361,17 @@ function bind() {
     await deleteLocalMonth(button.dataset.deleteMonth!)
   })
   const calendar = document.querySelector<HTMLElement>('#calendar')
+  calendar?.addEventListener('keydown', event => {
+    if (!(event.target instanceof HTMLElement) || !event.target.dataset.day) return
+    const movement: Record<string, number> = { ArrowLeft:-1,ArrowRight:1,ArrowUp:-7,ArrowDown:7 }
+    if (!(event.key in movement)) return
+    event.preventDefault()
+    const day = new Date(event.target.dataset.day + 'T12:00:00')
+    day.setDate(day.getDate() + movement[event.key])
+    const key = localDateId(day)
+    if (key.slice(0,7) !== selected) { selected=key.slice(0,7); selectedDate=null; render() }
+    requestAnimationFrame(() => document.querySelector<HTMLElement>('[data-day="'+key+'"]')?.focus())
+  })
   calendar?.addEventListener('click', event => {
     if (Date.now() < ignoreDayClicksUntil || !(event.target instanceof Element)) return
     const button = event.target.closest<HTMLButtonElement>('[data-day]')
@@ -522,12 +391,14 @@ function closeDayDetails() {
   const card = document.querySelector<HTMLElement>('#shift-details')
   const button = document.querySelector<HTMLButtonElement>('#detail-close')
   if (!selectedDate || !card) return
+  const returnDate = selectedDate
   ignoreDayClicksUntil = Date.now() + 650
   button?.setAttribute('disabled', '')
   card.classList.add('closing')
   window.setTimeout(() => {
     selectedDate = null
     render()
+    document.querySelector<HTMLElement>('[data-day="' + returnDate + '"],[data-agenda-day="' + returnDate + '"]')?.focus({preventScroll:true})
   }, 420)
 }
 
@@ -715,7 +586,7 @@ async function chooseDelta(parsed: ParsedSchedule) {
   const preferred = currentDelta || await storage.setting<string>('deltaNumber')
   const automatic = preferred && parsed.candidates.find(candidate => candidate.number === preferred)
   if (automatic && !parsed.warnings.length) {
-    await savePick(automatic)
+    await reviewPick(automatic)
     return
   }
   const choices = parsed.candidates.map(candidate => {
@@ -724,8 +595,23 @@ async function chooseDelta(parsed: ParsedSchedule) {
     return '<button data-delta="' + candidate.number + '" class="choice ' + (candidate.number === preferred ? 'recommended' : '') + '"><b>' + candidate.number + '</b><span>' + workCount + ' подтверждённых рабочих отметок' + (tentativeCount ? ' · возможных ' + tentativeCount : '') + (candidate.leaveDates.length ? ' · отпуск ' + candidate.leaveDates.length + ' дн.' : '') + (candidate.number === preferred ? ' · использовали раньше' : '') + '</span></button>'
   }).join('')
   open('<h2>Чей это график?</h2><p>' + humanMonth(parsed.month) + ' · найдены номера из PDF. ' + parsed.warnings.join(' ') + '</p><div class="choices">' + choices + '</div><button class="primary" id="cancel">Отмена</button>')
-  document.querySelectorAll<HTMLButtonElement>('[data-delta]').forEach(button => button.onclick = () => savePick(parsed.candidates.find(candidate => candidate.number === button.dataset.delta)!))
+  document.querySelectorAll<HTMLButtonElement>('[data-delta]').forEach(button => button.onclick = () => run(() => reviewPick(parsed.candidates.find(candidate => candidate.number === button.dataset.delta)!)))
   document.querySelector('#cancel')!.addEventListener('click', close)
+}
+
+async function reviewPick(candidate: Candidate) {
+  if (!pending) return
+  const old = months.find(month => month.id === pending!.parsed.month)
+  const hash = await digest(pending.file)
+  if (old?.hash === hash && currentDelta === candidate.number) {
+    open('<h2>Этот график уже сохранён</h2><p>Файл совпадает с загруженным. Изменений нет.</p><button class="primary" id="close">Готово</button>')
+    pending = null
+    document.querySelector('#close')?.addEventListener('click', close)
+    return
+  }
+  open('<h2>' + (old ? 'Заменить график?' : 'Сохранить график?') + '</h2><p>' + humanMonth(pending.parsed.month) + '</p>' + importReview(candidate, old) + '<button class="primary" id="confirm-import">Сохранить график</button><button id="cancel">Отмена</button>')
+  document.querySelector('#cancel')?.addEventListener('click', () => { pending = null; close() })
+  document.querySelector<HTMLButtonElement>('#confirm-import')?.addEventListener('click', event => { (event.currentTarget as HTMLButtonElement).disabled = true; run(() => savePick(candidate)) })
 }
 
 async function savePick(candidate: Candidate, deltaChangeConfirmed = false) {
@@ -752,6 +638,7 @@ async function savePick(candidate: Candidate, deltaChangeConfirmed = false) {
     hash,
     marks: candidate.marks,
     candidates: pending.parsed.candidates,
+    rosterComplete: true,
     shifts: candidate.shifts,
     leaveDates: candidate.leaveDates,
     leaveCodes: candidate.leaveCodes,
@@ -760,7 +647,7 @@ async function savePick(candidate: Candidate, deltaChangeConfirmed = false) {
     calendar: { dirty: true },
   }
   await storage.saveImport(record, pending.file)
-  await storage.set('deltaNumber', candidate.number)
+  void navigator.storage?.persist?.().catch(() => false)
   currentDelta = candidate.number
   close()
   pending = null
@@ -783,7 +670,7 @@ function syncErrorKind(error: unknown): 'auth' | 'offline' | 'api' {
 }
 
 async function rememberSyncError(month: string, error: unknown, deltaNumber = currentDelta) {
-  const previous = syncFor(month, deltaNumber)
+  const previous = await storage.sync(calendarSyncId(month, deltaNumber, googleSettings.accountProfileId)) || syncFor(month, deltaNumber)
   const record: CalendarMonthSync = previous
     ? { ...previous, lastError: syncErrorKind(error) }
     : { id: calendarSyncId(month, deltaNumber, googleSettings.accountProfileId), month, deltaNumber, accountProfileId: googleSettings.accountProfileId, events: {}, lastError: syncErrorKind(error) }
@@ -935,6 +822,7 @@ async function previewMonthSync(month: string, removeAll: boolean, after?: () =>
           eventId: (key, recovery) => deterministicGoogleEventId(install, calendarSyncId(month, currentDelta, googleSettings.accountProfileId), key, recovery),
           accountProfileId: googleSettings.accountProfileId,
           reminders: currentCalendarReminders(),
+          checkpoint: async sync => { await storage.putSync(sync) },
         })
         if (removeAll) await storage.removeSync(result.id)
         else await storage.putSync(result)
@@ -974,14 +862,24 @@ function showImportedSyncChanges(month: string) {
   document.querySelector('#review-sync')?.addEventListener('click', () => void beginMonthSync(month))
 }
 
+function bindBackups() {
+  document.querySelector('#export-backup')?.addEventListener('click', () => run(async () => { await (await import('./backup')).exportBackup() }))
+  document.querySelector('#import-backup')?.addEventListener('click', () => run(async () => { (await import('./backup')).chooseBackup(async () => { currentDelta = ''; selected = ''; await start() }) }))
+}
+
 function showSettings() {
   const tracked = currentAccountSyncs().reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
   const trackedAcrossAccounts = calendarSyncs.reduce((sum, sync) => sum + Object.keys(sync.events).length, 0)
   const googleLabel = googleSettings.enabled ? `${googleSettings.accountEmail || 'аккаунт определяется'} · Подключено` : 'Не подключено'
   const accountLastSync = googleSettings.accountProfileId ? googleSettings.lastSyncByAccount?.[googleSettings.accountProfileId] : undefined
   const lastSync = accountLastSync ? new Date(accountLastSync).toLocaleString('ru-RU') : 'синхронизаций ещё не было'
-  open('<h2>Настройки</h2><p>Данные графиков хранятся в IndexedDB только на этом устройстве.</p><button class="calendar-button" id="delta-settings">Текущий D-номер <span>' + esc(currentDelta || 'не выбран') + '</span></button><button class="calendar-button google-settings-card" id="google-settings"><b>Google Calendar</b><span>' + esc(googleLabel) + '</span><small>Последняя синхронизация: ' + esc(lastSync) + (tracked ? ' · управляемых событий: ' + tracked : '') + '</small></button><nav class="settings-legal" aria-label="Правовая информация"><a href="privacy/" target="_blank" rel="noopener">Политика конфиденциальности</a><a href="terms/" target="_blank" rel="noopener">Условия использования</a></nav><button class="danger" id="wipe">Удалить все локальные данные</button><button class="primary" id="close">Закрыть</button>')
+  open('<h2>Настройки</h2><p>Графики и оригиналы PDF сохраняются на этом устройстве.</p><button class="calendar-button" id="delta-settings">Текущий D-номер <span>' + esc(currentDelta || 'не выбран') + '</span></button><button class="calendar-button google-settings-card" id="google-settings"><b>Google Calendar</b><span>' + esc(googleLabel) + '</span><small>Последняя синхронизация: ' + esc(lastSync) + (tracked ? ' · событий приложения: ' + tracked : '') + '</small></button><nav class="settings-legal" aria-label="Правовая информация"><a href="privacy/" target="_blank" rel="noopener">Политика конфиденциальности</a><a href="terms/" target="_blank" rel="noopener">Условия использования</a></nav><button class="danger" id="wipe">Удалить все локальные данные</button><button class="primary" id="close">Закрыть</button>')
   document.querySelector('#close')?.addEventListener('click', close)
+  const tools = document.createElement('section')
+  tools.innerHTML = '<button class="calendar-button" id="export-backup">Сохранить резервную копию</button><button class="calendar-button" id="import-backup">Восстановить из копии</button><p class="storage-status" role="status">Проверяем хранилище…</p>'
+  document.querySelector('#wipe')?.before(tools)
+  bindBackups()
+  run(async () => { tools.querySelector('.storage-status')!.textContent = await (await import('./backup')).storageDescription() })
   document.querySelector('#delta-settings')?.addEventListener('click', showDeltaSettings)
   document.querySelector('#google-settings')?.addEventListener('click', showGoogleSettings)
   document.querySelector('#wipe')?.addEventListener('click', async () => {
@@ -990,6 +888,7 @@ function showSettings() {
       await storage.clear()
       currentDelta = ''
       googleSettings = { enabled: false }
+      clearGoogleAccessToken()
       setGoogleLoginHint(undefined)
       close()
       await refresh()
@@ -1183,7 +1082,7 @@ async function switchGoogleAccount() {
   try {
     open('<div class="busy"><div class="spinner"></div><h2>Готовим выбор аккаунта</h2></div>')
     await prepareGoogleIdentityServices()
-    open('<h2>Сменить Google-аккаунт?</h2><p>События и sync metadata прежнего аккаунта сохранятся отдельно и не будут смешаны с выбранным аккаунтом.</p><button class="primary" id="select-google-account">Выбрать Google-аккаунт</button><button id="back">Отмена</button>')
+    open('<h2>Сменить Google-аккаунт?</h2><p>События и история синхронизации прежнего аккаунта сохранятся отдельно и не будут смешаны с выбранным аккаунтом.</p><button class="primary" id="select-google-account">Выбрать Google-аккаунт</button><button id="back">Отмена</button>')
     document.querySelector('#back')?.addEventListener('click', showGoogleSettings)
     document.querySelector<HTMLButtonElement>('#select-google-account')?.addEventListener('click', async event => {
       const button = event.currentTarget as HTMLButtonElement
@@ -1272,7 +1171,7 @@ async function removeSyncRecords(records: CalendarMonthSync[], after: () => Prom
         open('<div class="busy"><div class="spinner"></div><h2>Удаляем события PWA</h2></div>')
         const install = await installationId()
         for (const item of audited) {
-          await applyCalendarSync({ month: item.sync.month, deltaNumber: item.sync.deltaNumber, desired: [], previous: item.sync, audits: item.audits, gateway: googleCalendarGateway, eventId: (key, recovery) => deterministicGoogleEventId(install, item.sync.id, key, recovery), accountProfileId: item.sync.accountProfileId })
+          await applyCalendarSync({ month: item.sync.month, deltaNumber: item.sync.deltaNumber, desired: [], previous: item.sync, audits: item.audits, gateway: googleCalendarGateway, eventId: (key, recovery) => deterministicGoogleEventId(install, item.sync.id, key, recovery), accountProfileId: item.sync.accountProfileId, checkpoint: async sync => { await storage.putSync(sync) } })
           await storage.removeSync(item.sync.id)
         }
         await after()
@@ -1287,19 +1186,10 @@ async function removeSyncRecords(records: CalendarMonthSync[], after: () => Prom
   }, records[0].deltaNumber)
 }
 
-function open(html: string) {
-  const dialog = document.querySelector<HTMLDialogElement>('#dialog')!
-  dialog.innerHTML = html
-  if (!dialog.open) dialog.showModal()
-}
-
-function close() {
-  document.querySelector<HTMLDialogElement>('#dialog')?.close()
-}
-
 async function openPdf(id: string, popup: Window | null = null) {
   const pdf = await storage.pdf(id)
   if (!pdf) {
+    popup?.close()
     open('<h2>Оригинал недоступен</h2><p>Этот месяц был импортирован до обновления приложения, когда PDF ещё не сохранялся. Импортируйте исходный файл повторно.</p><button class="primary" id="close">Понятно</button>')
     document.querySelector('#close')!.addEventListener('click', close)
     return
@@ -1317,6 +1207,7 @@ function offerUpdate() {
   notice.setAttribute('role', 'status')
   notice.innerHTML = '<div><b>Доступна новая версия</b><span>Ваши сохранённые графики останутся на устройстве.</span></div><button class="primary">Перезапустить</button>'
   notice.querySelector('button')!.addEventListener('click', async () => {
+    if (dialogBusy() || pending || document.querySelector('#dialog[open]')) { notice.querySelector('span')!.textContent = 'Сначала завершите действие и закройте диалог.'; return }
     const button = notice.querySelector('button') as HTMLButtonElement
     button.disabled = true
     button.textContent = 'Обновляем…'
@@ -1329,6 +1220,30 @@ applyUpdate = registerSW({ onNeedRefresh: offerUpdate })
 document.addEventListener('visibilitychange', () => {
   if (!document.hidden && !monthTransitioning && !document.querySelector<HTMLDialogElement>('#dialog')?.open) render()
 })
-window.addEventListener('online', render)
-window.addEventListener('offline', render)
-refresh()
+function networkChanged() {
+  if (document.querySelector('#dialog[open]')) {
+    const dialog = document.querySelector('#dialog')!
+    let status = dialog.querySelector<HTMLElement>('.network-status')
+    if (!status) { status = document.createElement('p'); status.className = 'network-status'; status.setAttribute('role', 'status'); dialog.append(status) }
+    status.textContent = navigator.onLine ? 'Соединение восстановлено.' : 'Нет сети. Локальные данные доступны.'
+  } else render()
+}
+window.addEventListener('online', networkChanged)
+document.addEventListener('keydown', event => { if (event.key === 'Escape' && selectedDate && !document.querySelector('#dialog[open]')) closeDayDetails() })
+document.addEventListener('cancel', () => { if (!dialogBusy()) pending = null }, true)
+window.addEventListener('offline', networkChanged)
+window.addEventListener('unhandledrejection', event => { event.preventDefault(); localError(event.reason) })
+window.addEventListener('beforeunload', event => { if (dialogBusy()) { event.preventDefault(); event.returnValue = '' } })
+async function start() {
+  try {
+    calendarMode = await storage.setting<'grid' | 'list'>('calendarMode') === 'list' ? 'list' : 'grid'
+    showColleagues = Boolean(await storage.setting('showColleagues'))
+    await refresh()
+  } catch (error) {
+    app.innerHTML = '<section class="welcome"><h1>Не удалось открыть данные</h1><p>Проверьте доступ к хранилищу браузера и свободное место. Данные не удалены.</p><button class="primary" id="retry-start">Повторить</button></section>'
+    document.querySelector('#retry-start')?.addEventListener('click', () => void start())
+    localError(error)
+  }
+}
+void start()
+setInterval(() => { if (!document.hidden && !document.querySelector('#dialog[open]') && !monthTransitioning && !calendarGestureActive) render() }, 60_000)

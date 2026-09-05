@@ -12,6 +12,16 @@ function record(id: string, marks: DayMark[]): MonthRecord {
 }
 
 describe('monthly roster analysis', () => {
+  it('separates source hours, full shifts and hours inside the calendar month', () => {
+    const result = analyzeMonth([record('2026-08',[{date:'2026-08-31',kind:'hours',raw:'16',hours:16}])], '2026-08','D12')
+    expect(result).toMatchObject({pdfHours:16,workHours:24,calendarHours:16,calendarNightHours:2})
+  })
+  it('counts unresolved boundary hours and requires the selected employee in adjacent PDFs', () => {
+    const source = record('2026-08',[{date:'2026-08-31',kind:'hours',raw:'16',hours:16}])
+    source.candidates!.push({...source.candidates![0],number:'D40'})
+    const next = record('2026-09',[]);next.candidates![0].number='D40'
+    expect(analyzeMonth([source,next],'2026-08','D12')).toMatchObject({workHours:16,calendarHours:16,hasFollowingMonth:false,incompleteDays:['2026-08-31']})
+  })
   it('splits on-site work into legal night time 22:00–06:00 and daytime', () => {
     const result = analyzeMonth([
       record('2026-07', []),
