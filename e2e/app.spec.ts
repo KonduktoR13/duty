@@ -1,6 +1,9 @@
 import { test, expect, type Page } from '@playwright/test'
 import { rosterPdf } from './fixture'
 import { updateServer } from './update-server'
+import { readFileSync } from 'node:fs'
+
+const appVersion: string = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')).version
 
 async function importRoster(page: Page, code = '24') {
   await page.locator('#file').setInputFiles(rosterPdf(code))
@@ -197,6 +200,59 @@ test('employee workload is collapsed, changes with the month and fits a narrow s
   await expect(ranking).not.toHaveAttribute('open')
 })
 
+test('workload headers switch the ranking, preserve focus and remember the selected sort', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 780 })
+  await page.goto('/')
+  await page.locator('#file').setInputFiles(rosterPdf('24', 'August', ['24', '24', '24', '24']))
+  await page.locator('[data-delta="D12"]').click()
+  await page.locator('#confirm-import').click()
+  await expect(page.locator('#dialog')).not.toBeVisible()
+  await importRoster(page)
+  await page.locator('[data-section="analysis"]').click()
+  const ranking = page.locator('#employee-workload')
+  await ranking.locator('summary').click()
+  const total = page.locator('#employee-workload-sort-total')
+  const month = page.locator('#employee-workload-sort-month')
+  const names = ranking.locator('tbody th')
+  const monthlyOrder = ['D12Вы', 'D40']
+  const totalOrder = ['D40', 'D12Вы']
+  await expect(names).toHaveText(monthlyOrder)
+  await expect(month.locator('..')).toHaveAttribute('aria-sort', 'descending')
+  await total.focus()
+  await page.keyboard.press('Enter')
+  await expect(names).toHaveText(totalOrder)
+  await expect(total).toBeFocused()
+  await expect(ranking).toHaveAttribute('open')
+  await expect(total.locator('..')).toHaveAttribute('aria-sort', 'descending')
+  await expect(month.locator('..')).toHaveAttribute('aria-sort', 'none')
+  await expect(total).toContainText('↓')
+  await expect(ranking.locator('summary')).toContainText('D12: 2 из 2 · Всего')
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme })
+    expect(await total.evaluate(el => el.getBoundingClientRect().height)).toBeGreaterThanOrEqual(44)
+    expect(await ranking.locator('table').evaluate(el => el.scrollWidth <= el.clientWidth)).toBe(true)
+  }
+  // Repeated clicks retain descending order; selecting the other header switches the metric.
+  await total.click()
+  await expect(names).toHaveText(totalOrder)
+  await month.click()
+  await expect(names).toHaveText(monthlyOrder)
+  await expect(ranking.locator('summary')).toContainText('D12: 1 из 2 · За месяц')
+  await total.click()
+  await expect(names).toHaveText(totalOrder)
+  await page.locator('#prev').click()
+  await expect(ranking).not.toHaveAttribute('open')
+  await ranking.locator('summary').click()
+  await expect(names).toHaveText(totalOrder)
+  await expect(total.locator('..')).toHaveAttribute('aria-sort', 'descending')
+  await page.reload()
+  await page.locator('[data-section="analysis"]').click()
+  await expect(ranking).not.toHaveAttribute('open')
+  await ranking.locator('summary').click()
+  await expect(names).toHaveText(totalOrder)
+  await expect(total.locator('..')).toHaveAttribute('aria-sort', 'descending')
+})
+
 test('PWA update waits for the import confirmation and retains saved data', async ({ page }) => {
   const server = await updateServer()
   try {
@@ -220,7 +276,7 @@ test('PWA update waits for the import confirmation and retains saved data', asyn
     await expect(page.locator('[data-day="2026-09-07"]')).toContainText('12')
     await expect(page.locator('#header-delta')).toHaveText('D12 ▾')
     await page.locator('#settings').click()
-    await expect(page.locator('.settings-version')).toHaveText('Версия 0.2.0')
+    await expect(page.locator('.settings-version')).toHaveText('Версия ' + appVersion)
   } finally {
     server.close()
   }

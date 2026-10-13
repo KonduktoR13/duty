@@ -49,3 +49,7 @@ it('accepts local salary forecast settings in a backup', async () => {
   const result = await readBackup(new Blob([JSON.stringify({ ...base, settings: [['salarySettings', salary]] })]))
   expect(result.settings).toEqual([['salarySettings', salary]])
 })
+it('preserves the workload sort preference in a backup', async () => {
+  const result = await readBackup(new Blob([JSON.stringify({ ...base, settings: [['employeeWorkloadSort', 'total']] })]))
+  expect(result.settings).toEqual([['employeeWorkloadSort', 'total']])
+})

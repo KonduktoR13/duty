@@ -10,6 +10,7 @@ import { clearGoogleAccessToken, deterministicGoogleEventId, discoverDutyAccount
 import { createGoogleAccountProfileId, googleEmailKey, resolveGoogleEmailProfile } from './google-account'
 import { humanMonth } from './schedule'
 import { analysisView } from './analysis-view'
+import type { EmployeeWorkloadSort } from './employee-workload'
 import { DEFAULT_SALARY_SETTINGS, normalizeSalarySettings } from './salary-calculation'
 import { importReview } from './import-review'
 import { documentsView } from './documents-view'
@@ -55,6 +56,7 @@ let legendExpanded = false
 let lastRenderedSection: AppSection = section
 let calendarMode: 'grid' | 'list' = 'grid'
 let showColleagues = false
+let employeeWorkloadSort: EmployeeWorkloadSort = 'month'
 let revisions = new Set<string>()
 let deltaReturnToSettings = false
 
@@ -87,6 +89,7 @@ async function refresh() {
     storage.setting<GoogleIntegrationSettings>('googleIntegration').then(value => value || { enabled: false }),
     storage.setting<SalarySettings>('salarySettings').then(normalizeSalarySettings),
   ])
+  employeeWorkloadSort = await storage.setting<EmployeeWorkloadSort>('employeeWorkloadSort') === 'total' ? 'total' : 'month'
   revisions = new Set((await Promise.all(months.map(async month => await storage.revision(month.id) ? month.id : ''))).filter(Boolean))
   if (!googleSettings.accountProfileId && (googleSettings.enabled || calendarSyncs.length)) {
     const accountProfileId = createGoogleAccountProfileId()
@@ -165,7 +168,7 @@ function render() {
   const mainContent = section === 'documents'
     ? documentsView(months, currentDelta, revisions)
     : section === 'analysis'
-      ? analysisView(current, months, currentDelta, salarySettings)
+      ? analysisView(current, months, currentDelta, salarySettings, employeeWorkloadSort)
       : !months.length
         ? welcome()
         : hero(upcomingDay()) + legacyNotice() + monthView(current)
@@ -332,6 +335,15 @@ function bind() {
   document.querySelector('#picker')?.addEventListener('click', showMonths)
   document.querySelector('#settings')?.addEventListener('click', showSettings)
   document.querySelector('#analysis-salary-settings')?.addEventListener('click', () => showSalarySettings(true))
+  document.querySelectorAll<HTMLButtonElement>('[data-workload-sort]').forEach(button => button.onclick = () => {
+    const sort = button.dataset.workloadSort === 'total' ? 'total' : 'month'
+    if (sort === employeeWorkloadSort) return
+    run(async () => {
+      await storage.set('employeeWorkloadSort', sort)
+      employeeWorkloadSort = sort
+      render()
+    })
+  })
   document.querySelector('#sync-month')?.addEventListener('click', () => void beginMonthSync(selected))
   document.querySelector('#legend-toggle')?.addEventListener('click', event => {
     legendExpanded = !legendExpanded

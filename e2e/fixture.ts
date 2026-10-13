@@ -1,5 +1,5 @@
 // Small text PDF with a coordinate table. No employee data or external files.
-export function rosterPdf(code = '24', month = 'September') {
+export function rosterPdf(code = '24', month = 'September', colleagueCodes = ['8']) {
   const days = month === 'August' ? 31 : 30
   const commands = [`BT /F1 12 Tf 40 760 Td (${month} 2026) Tj ET`]
   const text = (x: number, y: number, value: string) =>
@@ -8,7 +8,7 @@ export function rosterPdf(code = '24', month = 'September') {
   text(30, 670, 'D12')
   text(30, 640, 'D40')
   text(65 + 6 * 16, 670, code)
-  text(65 + 7 * 16, 640, '8')
+  colleagueCodes.forEach((value, index) => text(65 + (7 + index * 3) * 16, 640, value))
   text(65 + (days - 1) * 16, 670, '16')
   const stream = commands.join('\n')
   const objects = [

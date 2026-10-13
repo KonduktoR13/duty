@@ -3,7 +3,7 @@ import { candidateForMonth } from './roster'
 import { analyzeMonth, type AnalysisCheck } from './month-analysis'
 import { esc } from './ui'
 import { salaryForecast } from './salary-calculation'
-import { rankEmployeeWorkload } from './employee-workload'
+import { rankEmployeeWorkload, type EmployeeWorkloadSort } from './employee-workload'
 import type { MonthRecord, SalarySettings } from './types'
 function formatAnalysisHours(value: number) {
   return String(Math.round(value * 10) / 10).replace('.', ',') + ' ч'
@@ -58,22 +58,24 @@ function issueCountLabel(count: number) {
   return `${count} ${ending} для проверки`
 }
 
-function employeeWorkloadView(months: MonthRecord[], monthId: string, currentDelta: string) {
-  const rows = rankEmployeeWorkload(months, monthId)
+function employeeWorkloadView(months: MonthRecord[], monthId: string, currentDelta: string, sort: EmployeeWorkloadSort) {
+  const rows = rankEmployeeWorkload(months, monthId, sort)
   if (!rows.length) return ''
   const own = rows.find(row => row.deltaNumber === currentDelta)
   const position = own ? ` · ${esc(currentDelta)}: ${own.rank} из ${rows.length}` : ''
-  return `<details class="employee-workload" id="employee-workload" data-month="${esc(monthId)}">
-    <summary id="employee-workload-toggle"><span><b>Нагрузка сотрудников</b><small>D-номеров: ${rows.length}${position}</small></span><i aria-hidden="true">⌄</i></summary>
+  const sortLabel = sort === 'total' ? 'Всего' : 'За месяц'
+  const sortHeader = (mode: EmployeeWorkloadSort, label: string, description: string) => `<th scope="col" class="employee-workload-sort" aria-sort="${sort === mode ? 'descending' : 'none'}"><button id="employee-workload-sort-${mode}" data-workload-sort="${mode}" aria-label="${description}, по убыванию">${label}${sort === mode ? ' <span aria-hidden="true">↓</span>' : ''}</button></th>`
+  return `<details class="employee-workload" id="employee-workload" data-month="${esc(monthId)}" data-sort="${sort}">
+    <summary id="employee-workload-toggle"><span><b>Нагрузка сотрудников</b><small>D-номеров: ${rows.length}${position} · ${sortLabel}</small></span><i aria-hidden="true">⌄</i></summary>
     <div class="employee-workload-content">
       <table aria-label="Рейтинг сотрудников по рабочим часам за ${esc(humanMonth(monthId))}" aria-describedby="employee-workload-note">
-        <thead><tr><th scope="col">Место</th><th scope="col">D-номер</th><th scope="col">Месяц, ч</th><th scope="col">Всего, ч</th></tr></thead>
+        <thead><tr><th scope="col">Место</th><th scope="col">D-номер</th>${sortHeader('month', 'Месяц, ч', 'Сортировать по часам за месяц')}${sortHeader('total', 'Всего, ч', 'Сортировать по общим часам')}</tr></thead>
         <tbody>${rows.map(row => `<tr${row.deltaNumber === currentDelta ? ' class="employee-workload-own"' : ''}>
           <td>${row.rank}</td><th scope="row">${esc(row.deltaNumber)}${row.deltaNumber === currentDelta ? '<small>Вы</small>' : ''}</th>
           <td>${String(row.monthHours).replace('.', ',')}</td><td>${String(row.totalHours).replace('.', ',')}${row.availableMonths < months.length ? `<small>${row.availableMonths} из ${months.length} мес.</small>` : ''}</td>
         </tr>`).join('')}</tbody>
       </table>
-      <p id="employee-workload-note">По убыванию рабочих часов в календарном месяце. Переходящие смены делятся по полуночи; V и возможные выходы # не включены. Всего — за загруженные месяцы (${months.length}). Без соседних графиков данные на границах могут быть неполными.</p>
+      <p id="employee-workload-note">Нажмите «Месяц, ч» или «Всего, ч», чтобы выбрать сортировку по убыванию. Переходящие смены делятся по полуночи; V и возможные выходы # не включены. Всего — за загруженные месяцы (${months.length}). Без соседних графиков данные на границах могут быть неполными.</p>
       ${sourceRosterIncomplete(months, monthId) ? '<p class="employee-workload-note">В сохранённом графике доступны не все D-номера. Для полного списка импортируйте PDF повторно.</p>' : ''}
     </div>
   </details>`
@@ -84,7 +86,7 @@ function sourceRosterIncomplete(months: MonthRecord[], monthId: string) {
   return source && (!source.candidates?.length || source.rosterComplete === false)
 }
 
-export function analysisView(month: MonthRecord, months: MonthRecord[], currentDelta: string, salarySettings: SalarySettings) {
+export function analysisView(month: MonthRecord, months: MonthRecord[], currentDelta: string, salarySettings: SalarySettings, workloadSort: EmployeeWorkloadSort = 'month') {
   if (!months.length)
     return '<section class="analysis-empty"><div>◔</div><h2>Сначала добавьте график</h2><p>Анализ выполняется только на устройстве по данным импортированного PDF.</p><button class="primary" id="import">Импортировать PDF</button></section>'
   const navigation =
@@ -92,7 +94,7 @@ export function analysisView(month: MonthRecord, months: MonthRecord[], currentD
     humanMonth(month.id) +
     '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav>'
   const source = months.find((item) => item.id === month.id)
-  const employeeWorkload = employeeWorkloadView(months, month.id, currentDelta)
+  const employeeWorkload = employeeWorkloadView(months, month.id, currentDelta, workloadSort)
   if (!source || !candidateForMonth(source, currentDelta))
     return (
       navigation +

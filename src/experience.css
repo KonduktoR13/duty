@@ -310,7 +310,10 @@
 .employee-workload th:first-child, .employee-workload td:first-child { width: 17%; text-align: center; color: var(--muted); }
 .employee-workload th:nth-child(2) { text-align: left; }
 .employee-workload thead th { color: var(--muted); font-size: 11px; font-weight: 600; }
-.employee-workload tbody td:nth-child(3) { font-weight: 750; }
+.employee-workload[data-sort='month'] tbody td:nth-child(3), .employee-workload[data-sort='total'] tbody td:nth-child(4) { font-weight: 750; }
+.employee-workload thead .employee-workload-sort { padding: 0; }
+.employee-workload-sort button { width: 100%; min-height: 44px; padding: 10px 4px; border-radius: 8px; background: transparent; color: var(--muted); font-size: inherit; text-align: right; text-decoration: underline dotted; text-underline-offset: 3px; }
+.employee-workload-sort[aria-sort='descending'] button { background: var(--soft); color: var(--accent); font-weight: 750; text-decoration: none; }
 .employee-workload tbody small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; font-weight: 400; }
 .employee-workload-own { background: var(--soft); color: var(--accent); }
 .employee-workload-content > p { margin: 12px 4px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }

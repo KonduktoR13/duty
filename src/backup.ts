@@ -110,6 +110,7 @@ const settings = z.array(
     z.tuple([z.literal('googleIntegration'), google]),
     z.tuple([z.literal('calendarMode'), z.enum(['grid', 'list'])]),
     z.tuple([z.literal('showColleagues'), z.boolean()]),
+    z.tuple([z.literal('employeeWorkloadSort'), z.enum(['month', 'total'])]),
     z.tuple([z.literal('salarySettings'), salary]),
   ]),
 )

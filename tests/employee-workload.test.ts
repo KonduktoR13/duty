@@ -15,6 +15,19 @@ function record(id: string, entries: Record<string, DayMark[]>): MonthRecord {
 const work = (date: string, hours: number, raw = String(hours)): DayMark => ({ date, kind: 'hours', hours, raw })
 
 describe('employee calendar-hour ranking', () => {
+  it('ranks and shares places by the selected column, using numeric D-number order for ties', () => {
+    const months = [
+      record('2026-07', { D12: [], D2: [work('2026-07-03', 16)], D10: [work('2026-07-03', 24)], D40: [] }),
+      record('2026-08', { D12: [work('2026-08-03', 24)], D2: [work('2026-08-03', 8)], D10: [], D40: [work('2026-08-03', 8)] }),
+    ]
+    expect(rankEmployeeWorkload(months, '2026-08', 'month').map(row => [row.deltaNumber, row.rank])).toEqual([
+      ['D12', 1], ['D2', 2], ['D40', 2], ['D10', 4],
+    ])
+    expect(rankEmployeeWorkload(months, '2026-08', 'total').map(row => [row.deltaNumber, row.rank, row.totalHours])).toEqual([
+      ['D2', 1, 24], ['D10', 1, 24], ['D12', 1, 24], ['D40', 4, 8],
+    ])
+  })
+
   it('includes zero-hour employees, excludes employees absent from the selected PDF and uses shared places', () => {
     const months = [
       record('2026-07', { D99: [work('2026-07-03', 24)] }),
