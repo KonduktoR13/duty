@@ -2,9 +2,19 @@ import { humanMonth } from './schedule'
 import { candidateForMonth } from './roster'
 import { analyzeMonth, type AnalysisCheck } from './month-analysis'
 import { esc } from './ui'
-import type { MonthRecord } from './types'
+import { salaryForecast } from './salary-calculation'
+import { rankEmployeeWorkload } from './employee-workload'
+import type { MonthRecord, SalarySettings } from './types'
 function formatAnalysisHours(value: number) {
   return String(Math.round(value * 10) / 10).replace('.', ',') + ' ч'
+}
+
+function money(value: number) {
+  return new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(value) + ' €'
+}
+
+function rate(value: number) {
+  return new Intl.NumberFormat('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 4 }).format(value) + ' €/ч'
 }
 
 function analysisRule(check: AnalysisCheck) {
@@ -48,7 +58,33 @@ function issueCountLabel(count: number) {
   return `${count} ${ending} для проверки`
 }
 
-export function analysisView(month: MonthRecord, months: MonthRecord[], currentDelta: string) {
+function employeeWorkloadView(months: MonthRecord[], monthId: string, currentDelta: string) {
+  const rows = rankEmployeeWorkload(months, monthId)
+  if (!rows.length) return ''
+  const own = rows.find(row => row.deltaNumber === currentDelta)
+  const position = own ? ` · ${esc(currentDelta)}: ${own.rank} из ${rows.length}` : ''
+  return `<details class="employee-workload" id="employee-workload" data-month="${esc(monthId)}">
+    <summary id="employee-workload-toggle"><span><b>Нагрузка сотрудников</b><small>D-номеров: ${rows.length}${position}</small></span><i aria-hidden="true">⌄</i></summary>
+    <div class="employee-workload-content">
+      <table aria-label="Рейтинг сотрудников по рабочим часам за ${esc(humanMonth(monthId))}" aria-describedby="employee-workload-note">
+        <thead><tr><th scope="col">Место</th><th scope="col">D-номер</th><th scope="col">Месяц, ч</th><th scope="col">Всего, ч</th></tr></thead>
+        <tbody>${rows.map(row => `<tr${row.deltaNumber === currentDelta ? ' class="employee-workload-own"' : ''}>
+          <td>${row.rank}</td><th scope="row">${esc(row.deltaNumber)}${row.deltaNumber === currentDelta ? '<small>Вы</small>' : ''}</th>
+          <td>${String(row.monthHours).replace('.', ',')}</td><td>${String(row.totalHours).replace('.', ',')}${row.availableMonths < months.length ? `<small>${row.availableMonths} из ${months.length} мес.</small>` : ''}</td>
+        </tr>`).join('')}</tbody>
+      </table>
+      <p id="employee-workload-note">По убыванию рабочих часов в календарном месяце. Переходящие смены делятся по полуночи; V и возможные выходы # не включены. Всего — за загруженные месяцы (${months.length}). Без соседних графиков данные на границах могут быть неполными.</p>
+      ${sourceRosterIncomplete(months, monthId) ? '<p class="employee-workload-note">В сохранённом графике доступны не все D-номера. Для полного списка импортируйте PDF повторно.</p>' : ''}
+    </div>
+  </details>`
+}
+
+function sourceRosterIncomplete(months: MonthRecord[], monthId: string) {
+  const source = months.find(month => month.id === monthId)
+  return source && (!source.candidates?.length || source.rosterComplete === false)
+}
+
+export function analysisView(month: MonthRecord, months: MonthRecord[], currentDelta: string, salarySettings: SalarySettings) {
   if (!months.length)
     return '<section class="analysis-empty"><div>◔</div><h2>Сначала добавьте график</h2><p>Анализ выполняется только на устройстве по данным импортированного PDF.</p><button class="primary" id="import">Импортировать PDF</button></section>'
   const navigation =
@@ -56,6 +92,7 @@ export function analysisView(month: MonthRecord, months: MonthRecord[], currentD
     humanMonth(month.id) +
     '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav>'
   const source = months.find((item) => item.id === month.id)
+  const employeeWorkload = employeeWorkloadView(months, month.id, currentDelta)
   if (!source || !candidateForMonth(source, currentDelta))
     return (
       navigation +
@@ -63,9 +100,25 @@ export function analysisView(month: MonthRecord, months: MonthRecord[], currentD
       esc(currentDelta) +
       '</h2><p>Для ' +
       humanMonth(month.id) +
-      ' график не загружен или в PDF нет выбранного D-номера.</p></section>'
+      ' график не загружен или в PDF нет выбранного D-номера.</p></section>' +
+      employeeWorkload
     )
   const analysis = analyzeMonth(months, month.id, currentDelta)
+  const salary = salaryForecast(month.id, analysis.calendarNightHours, salarySettings, {
+    homeDutyHours: analysis.calendarHomeDutyHours,
+    publicHolidayHours: analysis.publicHolidayHours,
+    vacationDays: analysis.paidVacationDays,
+  })
+  const salaryRow = (label: string, value: number, detail = '') => '<div><span>' + label + '</span><b>+ ' + money(value) + '</b>' + (detail ? '<small>' + detail + '</small>' : '') + '</div>'
+  const replacement = salary.replacementAllowance === undefined
+    ? ''
+    : salaryRow('Asendamise tasu · ' + String(salarySettings.replacementPercent).replace('.', ',') + '%', salary.replacementAllowance)
+  const homeDuty = salary.homeDutyHours ? salaryRow('Valveaeg · ' + String(salarySettings.homeDutyPercent).replace('.', ',') + '%', salary.homeDutyPremium, formatAnalysisHours(salary.homeDutyHours) + ' × ' + money(salary.homeDutyHourlyPremium) + '/ч') : ''
+  const holiday = salary.publicHolidayHours ? salaryRow('Töö riiklikul pühal · 100%', salary.publicHolidayPremium, formatAnalysisHours(salary.publicHolidayHours) + ' × ' + money(salary.publicHolidayHourlyPremium) + '/ч') : ''
+  const vacation = salary.vacationPay === undefined ? '' : salaryRow('Puhkusetasu · оценка', salary.vacationPay, salary.vacationDays + ' дн. × ' + money(salarySettings.vacationDailyRate))
+  const baseDetail = salary.vacationDays ? '<small>Месячная ставка ' + money(salarySettings.baseSalary) + '; часть за месяц оценочная</small>' : ''
+  const leaveWarning = salary.vacationDays ? ' При отпуске уменьшение põhipalk оценивается по календарным дням и может отличаться от бухгалтерского табеля.' : ''
+  const salaryCard = '<section class="salary-forecast"><div class="salary-head"><div><small>Прогноз · до налогов</small><h2>Зарплатные показатели</h2></div><button id="analysis-salary-settings" aria-label="Настроить расчёт зарплаты">⚙</button></div><div class="salary-grid"><div><span>Põhipalk' + (salary.vacationDays ? ' · часть месяца' : '') + '</span><b>' + money(salary.basePay) + '</b>' + baseDetail + '</div><div><span>Часовая ставка</span><b>' + rate(salary.hourlyRate) + '</b></div><div><span>Ночные часы месяца · 22–06</span><b>' + formatAnalysisHours(salary.nightHours) + '</b></div><div class="salary-night"><span>Öötöö 25%</span><b>+ ' + money(salary.nightPremium) + '</b><small>' + money(salary.nightHourlyPremium) + '/ч после округления</small></div>' + homeDuty + holiday + vacation + replacement + '</div><div class="salary-totals"><div><span>Примерно начислено · bruto</span><b>' + money(salary.gross) + '</b></div><div class="salary-net"><span>Примерно на руки · neto</span><strong>' + money(salary.net) + '</strong></div><details><summary>Удержания: − ' + money(salary.unemployment + salary.fundedPension + salary.incomeTax) + '</summary><small>Töötuskindlustus: ' + money(salary.unemployment) + ' · kogumispension: ' + money(salary.fundedPension) + ' · tulumaks: ' + money(salary.incomeTax) + '. Maksuvaba tulu: ' + money(salarySettings.taxFreeAllowance) + '.</small></details></div><p>Норма месяца: <b>' + salary.normHours + ' ч · ' + salary.normDays + ' раб. дн.</b> По плановому D-графику. Не включены непредсказуемые больничные, премии и сверхурочные.' + leaveWarning + '</p></section>'
   const totalParts = analysis.homeDutyHours
     ? '<span>+ ' + formatAnalysisHours(analysis.homeDutyHours) + ' valveaeg отдельно</span>'
     : '<span>Рабочее время по графику</span>'
@@ -142,6 +195,8 @@ export function analysisView(month: MonthRecord, months: MonthRecord[], currentD
     '</b><span>valveaeg · V</span></div>' +
     leave +
     '</section>' +
+    employeeWorkload +
+    salaryCard +
     boundary +
     verdict +
     '<section class="law-analysis"><header><div><small>Предварительная оценка · päästeametnik</small><h2>Служба и отдых по закону</h2></div><span>PäästeTS</span></header><p class="law-intro">Показаны только применимые к вашему графику правила. Откройте пункт, чтобы увидеть норму и расчёт простым языком.</p>' +

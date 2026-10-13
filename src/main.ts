@@ -10,11 +10,12 @@ import { clearGoogleAccessToken, deterministicGoogleEventId, discoverDutyAccount
 import { createGoogleAccountProfileId, googleEmailKey, resolveGoogleEmailProfile } from './google-account'
 import { humanMonth } from './schedule'
 import { analysisView } from './analysis-view'
+import { DEFAULT_SALARY_SETTINGS, normalizeSalarySettings } from './salary-calculation'
 import { importReview } from './import-review'
 import { documentsView } from './documents-view'
 import { createCalendarView } from './calendar-view'
-import { settingsView, deltaPickerView } from './settings-view'
-import type { CalendarMonthSync, CalendarReminderSettings, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule } from './types'
+import { settingsView, deltaPickerView, salarySettingsView } from './settings-view'
+import type { CalendarMonthSync, CalendarReminderSettings, Candidate, DayMark, GoogleIntegrationSettings, MonthRecord, ParsedSchedule, SalarySettings } from './types'
 import './style.css'
 import './interaction.css'
 import './experience.css'
@@ -40,12 +41,15 @@ let section: AppSection = 'calendar'
 let pending: { file: File; parsed: ParsedSchedule } | null = null
 function close() { pending = null; closeDialog() }
 let applyUpdate: ((reloadPage?: boolean) => Promise<void>) | undefined
+let serviceWorkerRegistration: ServiceWorkerRegistration | undefined
+let lastUpdateCheck = 0
 let monthTransitioning = false
 let calendarGestureActive = false
 let ignoreDayClicksUntil = 0
 let legacyNeedsReimport: string[] = []
 let calendarSyncs: CalendarMonthSync[] = []
 let googleSettings: GoogleIntegrationSettings = { enabled: false }
+let salarySettings: SalarySettings = DEFAULT_SALARY_SETTINGS
 let highlightSyncOffer = false
 let legendExpanded = false
 let lastRenderedSection: AppSection = section
@@ -77,10 +81,11 @@ function groupMarks(marks: DayMark[]) {
 function upcomingDay() { return nextWork(allMarks()) }
 
 async function refresh() {
-  ;[months, calendarSyncs, googleSettings] = await Promise.all([
+  ;[months, calendarSyncs, googleSettings, salarySettings] = await Promise.all([
     storage.months(),
     storage.syncs(),
     storage.setting<GoogleIntegrationSettings>('googleIntegration').then(value => value || { enabled: false }),
+    storage.setting<SalarySettings>('salarySettings').then(normalizeSalarySettings),
   ])
   revisions = new Set((await Promise.all(months.map(async month => await storage.revision(month.id) ? month.id : ''))).filter(Boolean))
   if (!googleSettings.accountProfileId && (googleSettings.enabled || calendarSyncs.length)) {
@@ -146,6 +151,8 @@ async function refresh() {
 }
 
 function render() {
+  const previousWorkload = document.querySelector<HTMLDetailsElement>('#employee-workload')
+  const workloadExpanded = section === 'analysis' && previousWorkload?.dataset.month === selected && previousWorkload.open
   const focused = document.activeElement as HTMLElement | null
   const focusId = focused?.id
   const focusDay = focused?.dataset.day
@@ -158,7 +165,7 @@ function render() {
   const mainContent = section === 'documents'
     ? documentsView(months, currentDelta, revisions)
     : section === 'analysis'
-      ? analysisView(current, months, currentDelta)
+      ? analysisView(current, months, currentDelta, salarySettings)
       : !months.length
         ? welcome()
         : hero(upcomingDay()) + legacyNotice() + monthView(current)
@@ -176,6 +183,8 @@ function render() {
     (section === 'analysis' ? 'active' : '') + '">◔<span>Анализ</span></button><button data-section="documents" class="' +
     (section === 'documents' ? 'active' : '') + '">▤<span>Графики</span></button></nav></div><input id="file" type="file" accept="application/pdf,.pdf" hidden>'
   bind()
+  const workload = document.querySelector<HTMLDetailsElement>('#employee-workload')
+  if (workload) workload.open = Boolean(workloadExpanded)
   document.querySelectorAll<HTMLButtonElement>('[data-section]').forEach(button => {
     if (button.dataset.section === section) button.setAttribute('aria-current', 'page')
     button.innerHTML = icon(button.dataset.section!) + '<span>' + ({ calendar: 'Календарь', analysis: 'Анализ', documents: 'Графики' }[button.dataset.section!] || '') + '</span>'
@@ -322,6 +331,7 @@ function bind() {
   document.querySelector('#next')?.addEventListener('click', () => moveMonth(1))
   document.querySelector('#picker')?.addEventListener('click', showMonths)
   document.querySelector('#settings')?.addEventListener('click', showSettings)
+  document.querySelector('#analysis-salary-settings')?.addEventListener('click', () => showSalarySettings(true))
   document.querySelector('#sync-month')?.addEventListener('click', () => void beginMonthSync(selected))
   document.querySelector('#legend-toggle')?.addEventListener('click', event => {
     legendExpanded = !legendExpanded
@@ -876,13 +886,14 @@ function showSettings() {
   const googleLabel = googleSettings.enabled ? `${googleSettings.accountEmail || 'аккаунт определяется'} · Подключено` : 'Не подключено'
   const accountLastSync = googleSettings.accountProfileId ? googleSettings.lastSyncByAccount?.[googleSettings.accountProfileId] : undefined
   const lastSync = accountLastSync ? 'Последняя синхронизация: ' + new Date(accountLastSync).toLocaleString('ru-RU') : 'Синхронизаций ещё не было'
-  open(settingsView({ delta: currentDelta, googleLabel, lastSync, tracked }), 'settings')
+  open(settingsView({ delta: currentDelta, googleLabel, lastSync, tracked, salary: salarySettings }), 'settings')
   document.querySelector('#close')?.addEventListener('click', close)
   const storageStatus = document.querySelector<HTMLElement>('#dialog .storage-status')!
   bindBackups()
   void import('./backup').then(backup => backup.storageDescription()).then(text => { storageStatus.textContent = text }).catch(() => { storageStatus.textContent = 'Не удалось определить занятое место. Сохранённые графики доступны.' })
   document.querySelector('#delta-settings')?.addEventListener('click', () => showDeltaSettings(true))
   document.querySelector('#google-settings')?.addEventListener('click', showGoogleSettings)
+  document.querySelector('#salary-settings')?.addEventListener('click', () => showSalarySettings(false))
   document.querySelector('#wipe')?.addEventListener('click', async () => {
     const warning = trackedAcrossAccounts ? ' События Google Calendar при этом останутся; сначала удалите их через настройки соответствующего Google-аккаунта, если они больше не нужны.' : ''
     if (confirm('Удалить все локальные PDF, графики и настройки с этого устройства?' + warning)) {
@@ -894,6 +905,43 @@ function showSettings() {
       close()
       await refresh()
     }
+  })
+}
+
+function showSalarySettings(fromAnalysis: boolean) {
+  open(salarySettingsView(salarySettings, fromAnalysis), 'settings')
+  const enabled = document.querySelector<HTMLInputElement>('#replacement-enabled')!
+  const percentRow = document.querySelector<HTMLElement>('#replacement-percent-row')!
+  const vacationEnabled = document.querySelector<HTMLInputElement>('#vacation-enabled')!
+  const vacationRateRow = document.querySelector<HTMLElement>('#vacation-rate-row')!
+  enabled.addEventListener('change', () => { percentRow.hidden = !enabled.checked })
+  vacationEnabled.addEventListener('change', () => { vacationRateRow.hidden = !vacationEnabled.checked })
+  document.querySelector('#salary-back')?.addEventListener('click', () => fromAnalysis ? close() : showSettings())
+  document.querySelector<HTMLFormElement>('#salary-form')?.addEventListener('submit', event => {
+    event.preventDefault()
+    const baseSalary = Number(document.querySelector<HTMLInputElement>('#base-salary')!.value.replace(',', '.'))
+    const replacementPercent = Number(document.querySelector<HTMLInputElement>('#replacement-percent')!.value.replace(',', '.'))
+    const number = (id: string) => Number(document.querySelector<HTMLInputElement>('#' + id)!.value.replace(',', '.'))
+    const vacationDailyRate = number('vacation-rate')
+    if (!(baseSalary > 0) || !(replacementPercent >= 0) || !(vacationDailyRate >= 0)) return
+    salarySettings = normalizeSalarySettings({
+      baseSalary,
+      replacementEnabled: enabled.checked,
+      replacementPercent,
+      vacationEnabled: vacationEnabled.checked,
+      vacationDailyRate,
+      incomeTaxPercent: number('income-tax-percent'),
+      taxFreeAllowance: number('tax-free-allowance'),
+      unemploymentPercent: number('unemployment-percent'),
+      fundedPensionPercent: number('funded-pension-percent'),
+      homeDutyPercent: number('home-duty-percent'),
+    })
+    run(async () => {
+      await storage.set('salarySettings', salarySettings)
+      close()
+      render()
+      if (!fromAnalysis) showSettings()
+    })
   })
 }
 
@@ -1223,8 +1271,19 @@ function offerUpdate() {
   document.body.append(notice)
 }
 
-applyUpdate = registerSW({ onNeedRefresh: offerUpdate })
+function checkForUpdate() {
+  if (!serviceWorkerRegistration || !navigator.onLine || document.hidden || Date.now() - lastUpdateCheck < 60_000) return
+  lastUpdateCheck = Date.now()
+  void serviceWorkerRegistration.update().catch(() => { /* Retry on the next check; local data stays available. */ })
+}
+
+applyUpdate = registerSW({
+  onNeedRefresh: offerUpdate,
+  onRegisteredSW(_url, registration) { serviceWorkerRegistration = registration },
+})
+setInterval(checkForUpdate, 60 * 60_000)
 document.addEventListener('visibilitychange', () => {
+  checkForUpdate()
   if (!document.hidden && !monthTransitioning && !document.querySelector<HTMLDialogElement>('#dialog')?.open) render()
 })
 function networkChanged() {
@@ -1235,7 +1294,7 @@ function networkChanged() {
     status.textContent = navigator.onLine ? 'Соединение восстановлено.' : 'Нет сети. Локальные данные доступны.'
   } else render()
 }
-window.addEventListener('online', networkChanged)
+window.addEventListener('online', () => { networkChanged(); checkForUpdate() })
 document.addEventListener('keydown', event => { if (event.key === 'Escape' && selectedDate && !document.querySelector('#dialog[open]')) closeDayDetails() })
 document.addEventListener('cancel', () => { if (!dialogBusy()) pending = null }, true)
 window.addEventListener('offline', networkChanged)

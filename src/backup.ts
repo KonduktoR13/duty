@@ -91,6 +91,18 @@ const google = z.object({
   lastSyncByAccount: z.record(text, z.number()).optional(),
   calendarReminders: reminders.optional(),
 })
+const salary = z.object({
+  baseSalary: z.number().finite().positive().max(100000),
+  replacementEnabled: z.boolean(),
+  replacementPercent: z.number().finite().min(0).max(100),
+  vacationEnabled: z.boolean().optional(),
+  vacationDailyRate: z.number().finite().min(0).max(10000).optional(),
+  incomeTaxPercent: z.number().finite().min(0).max(100).optional(),
+  taxFreeAllowance: z.number().finite().min(0).max(10000).optional(),
+  unemploymentPercent: z.number().finite().min(0).max(100).optional(),
+  fundedPensionPercent: z.number().finite().min(0).max(100).optional(),
+  homeDutyPercent: z.number().finite().min(0).max(100).optional(),
+})
 const settings = z.array(
   z.union([
     z.tuple([z.literal('deltaNumber'), z.union([delta, z.literal('')])]),
@@ -98,6 +110,7 @@ const settings = z.array(
     z.tuple([z.literal('googleIntegration'), google]),
     z.tuple([z.literal('calendarMode'), z.enum(['grid', 'list'])]),
     z.tuple([z.literal('showColleagues'), z.boolean()]),
+    z.tuple([z.literal('salarySettings'), salary]),
   ]),
 )
 const pdfData = z

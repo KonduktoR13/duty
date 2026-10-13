@@ -147,6 +147,56 @@ test('production CSP, keyboard focus and narrow layout', async ({ page }) => {
   expect(violations).toEqual([])
 })
 
+test('employee workload is collapsed, changes with the month and fits a narrow screen in both themes', async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 780 })
+  await page.goto('/')
+  await page.locator('#file').setInputFiles(rosterPdf('24', 'August'))
+  await page.locator('[data-delta="D12"]').click()
+  await page.locator('#confirm-import').click()
+  await expect(page.locator('#dialog')).not.toBeVisible()
+  await importRoster(page)
+  await page.locator('[data-section="analysis"]').click()
+  const ranking = page.locator('#employee-workload')
+  await expect(ranking).not.toHaveAttribute('open')
+  await expect(ranking.locator('summary')).toContainText('D12: 1 из 2')
+  await ranking.locator('summary').focus()
+  await page.keyboard.press('Enter')
+  await expect(ranking).toHaveAttribute('open')
+  const own = ranking.locator('.employee-workload-own')
+  await expect(own.locator('th')).toContainText('D12')
+  await expect(own.locator('td').nth(1)).toHaveText('48')
+  await expect(own.locator('td').nth(2)).toHaveText('88')
+  await expect(ranking.locator('tbody tr')).toHaveCount(2)
+  for (const colorScheme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme })
+    expect(await ranking.locator('table').evaluate(el => {
+      const parent = el.closest('.employee-workload')!.getBoundingClientRect()
+      return [...el.querySelectorAll('th, td')].every(cell => {
+        const rect = cell.getBoundingClientRect()
+        return rect.left >= parent.left && rect.right <= parent.right
+      })
+    })).toBe(true)
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true)
+  }
+  // A background network-status render must not collapse the open ranking.
+  await page.evaluate(() => window.dispatchEvent(new Event('online')))
+  await expect(ranking).toHaveAttribute('open')
+  await page.locator('#prev').click()
+  await expect(ranking).not.toHaveAttribute('open')
+  await ranking.locator('summary').click()
+  await expect(own.locator('td').nth(1)).toHaveText('40')
+  await expect(own.locator('td').nth(2)).toHaveText('88')
+  await page.locator('#header-delta').click()
+  await page.locator('[data-select-delta="D40"]').click()
+  await expect(ranking.locator('summary')).toContainText('D40: 2 из 2')
+  await expect(own.locator('th')).toContainText('D40')
+  await expect(own.locator('td').nth(1)).toHaveText('8')
+  await expect(own.locator('td').nth(2)).toHaveText('16')
+  await page.locator('[data-section="calendar"]').click()
+  await page.locator('[data-section="analysis"]').click()
+  await expect(ranking).not.toHaveAttribute('open')
+})
+
 test('PWA update waits for the import confirmation and retains saved data', async ({ page }) => {
   const server = await updateServer()
   try {
@@ -158,9 +208,8 @@ test('PWA update waits for the import confirmation and retains saved data', asyn
     await page.reload()
     await page.waitForLoadState('networkidle')
     server.bump()
-    await page.evaluate(async () => {
-      await (await navigator.serviceWorker.getRegistration())!.update()
-    })
+    // Returning online checks the deployed worker without requiring a reload.
+    await page.evaluate(() => window.dispatchEvent(new Event('online')))
     await expect(page.locator('#update-notice')).toBeVisible({ timeout: 15000 })
     await page.locator('#file').setInputFiles(rosterPdf('12'))
     await expect(page.locator('#confirm-import')).toBeVisible()
@@ -170,6 +219,8 @@ test('PWA update waits for the import confirmation and retains saved data', asyn
     await page.locator('#update-notice button').click()
     await expect(page.locator('[data-day="2026-09-07"]')).toContainText('12')
     await expect(page.locator('#header-delta')).toHaveText('D12 ▾')
+    await page.locator('#settings').click()
+    await expect(page.locator('.settings-version')).toHaveText('Версия 0.2.0')
   } finally {
     server.close()
   }

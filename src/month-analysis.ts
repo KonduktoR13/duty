@@ -2,6 +2,7 @@ import { workIntervals, type WorkInterval } from './intervals'
 import { allMarksForDelta, candidateForMonth } from './roster'
 import type { MonthRecord } from './types'
 import { evaluateRules, LIMITS } from './analysis-rules'
+import { isEstonianPublicHoliday } from './salary-calculation'
 
 export type AnalysisTone = 'ok' | 'attention' | 'info'
 export type AnalysisCheck = {
@@ -20,6 +21,8 @@ export type MonthAnalysis = {
   pdfHours: number
   calendarHours: number
   calendarNightHours: number
+  calendarHomeDutyHours: number
+  publicHolidayHours: number
   incompleteDays: string[]
   dayHours: number
   nightHours: number
@@ -28,6 +31,7 @@ export type MonthAnalysis = {
   operationalShiftCount: number
   workdayCount: number
   leaveDays: number
+  paidVacationDays: number
   minimumRestHours?: number
   longestRestHours?: number
   weeklyEquivalentHours: number
@@ -79,6 +83,19 @@ function nightMinutes(start: number, end: number) {
   return result
 }
 
+function publicHolidayMinutes(start: number, end: number) {
+  let result = 0
+  let cursor = start
+  while (cursor < end) {
+    const dayStart = cursor - (((cursor % MINUTES_IN_DAY) + MINUTES_IN_DAY) % MINUTES_IN_DAY)
+    const next = Math.min(end, dayStart + MINUTES_IN_DAY)
+    const date = new Date(dayStart * 60000).toISOString().slice(0, 10)
+    if (isEstonianPublicHoliday(date)) result += next - cursor
+    cursor = next
+  }
+  return result
+}
+
 function monthOffset(month: string, offset: number) {
   const [year, value] = month.split('-').map(Number)
   const date = new Date(Date.UTC(year, value - 1 + offset, 1))
@@ -94,6 +111,19 @@ function intervals(drafts: WorkInterval[]) {
   return drafts
     .map<Interval>(draft => ({ start: wallMinutes(draft.start.dateTime), end: wallMinutes(draft.end.dateTime), draft }))
     .sort((a, b) => a.start - b.start || a.end - b.end)
+}
+
+function hoursWithinMonth(values: Interval[], month: string) {
+  const start = wallMinutes(`${month}-01T00:00:00`)
+  const end = wallMinutes(`${monthOffset(month, 1)}-01T00:00:00`)
+  return roundHours(values.reduce((sum, item) => sum + Math.max(0, Math.min(item.end, end) - Math.max(item.start, start)), 0))
+}
+
+// Normalize the employee's cross-month shifts once, then clip to each requested
+// calendar month. Shared with the personal analysis so both views agree.
+export function calendarWorkHours(months: MonthRecord[], deltaNumber: string, monthIds: string[]) {
+  const onsite = intervals(draftsForAllMonths(months, deltaNumber).filter(draft => draft.kind === 'hours'))
+  return new Map(monthIds.map(month => [month, hoursWithinMonth(onsite, month)]))
 }
 
 function mergeIntervals(values: Interval[]) {
@@ -142,6 +172,7 @@ export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: 
   const onsiteDrafts = selectedDrafts.filter(draft => draft.kind === 'hours')
   const homeDrafts = selectedDrafts.filter(draft => draft.kind === 'home')
   const onsiteIntervals = intervals(allDrafts.filter(draft => draft.kind === 'hours'))
+  const homeIntervals = intervals(allDrafts.filter(draft => draft.kind === 'home'))
   // PäästeTS § 20 (6) defines a rescue-service standby period as part of rest.
   // Actual call-outs are work, but they are not encoded in the PDF roster.
   const occupied = mergeIntervals(onsiteIntervals)
@@ -153,6 +184,7 @@ export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: 
   const homeDutyHours = homeDrafts.reduce((sum, draft) => sum + draft.hours, 0)
   const tentativeHours = marks.filter((mark): mark is Extract<typeof mark, { kind: 'tentative' }> => mark.date.startsWith(month + '-') && mark.kind === 'tentative').reduce((sum, mark) => sum + mark.hours, 0)
   const leaveDays = new Set(marks.filter(mark => mark.date.startsWith(month + '-') && mark.kind === 'leave').map(mark => mark.date)).size
+  const paidVacationDays = new Set(marks.filter(mark => mark.date.startsWith(month + '-') && mark.kind === 'leave' && mark.raw === 'P' && !isEstonianPublicHoliday(mark.date)).map(mark => mark.date)).size
   const monthDays = new Date(Number(month.slice(0, 4)), Number(month.slice(5, 7)), 0).getDate()
   const weeklyEquivalentHours = roundHours(workHours * 7 * 60 / monthDays)
   const hasPreviousMonth = months.some(item => item.id === monthOffset(month, -1) && candidateForMonth(item, deltaNumber))
@@ -166,13 +198,24 @@ export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: 
 
   const checks = evaluateRules({ compensation, hasFollowingMonth, hasPreviousMonth, gaps, weeklyRestSeen, longestRestHours, weeklyEquivalentHours, homeDutyHours, shortenedShifts, roundHours, hourText, wallLabel })
 
+  const monthStart = wallMinutes(`${month}-01T00:00:00`)
+  const monthEnd = wallMinutes(`${monthOffset(month, 1)}-01T00:00:00`)
+  const withinMonth = (item: Interval) => ({ start: Math.max(item.start, monthStart), end: Math.min(item.end, monthEnd) })
   return {
     month,
     deltaNumber,
     workHours,
     pdfHours: months.filter(item => item.id === month).flatMap(item => candidateForMonth(item, deltaNumber)?.marks || []).reduce((sum, mark) => sum + (mark.kind === 'hours' ? mark.hours : 0), 0),
-    calendarHours: roundHours(onsiteIntervals.reduce((sum, item) => sum + Math.max(0, Math.min(item.end, wallMinutes(`${monthOffset(month, 1)}-01T00:00:00`)) - Math.max(item.start, wallMinutes(`${month}-01T00:00:00`))), 0)),
+    calendarHours: hoursWithinMonth(onsiteIntervals, month),
     calendarNightHours: roundHours(onsiteIntervals.reduce((sum, item) => sum + nightMinutes(Math.max(item.start, wallMinutes(`${month}-01T00:00:00`)), Math.min(item.end, wallMinutes(`${monthOffset(month, 1)}-01T00:00:00`))), 0)),
+    calendarHomeDutyHours: roundHours(homeIntervals.reduce((sum, item) => {
+      const clipped = withinMonth(item)
+      return sum + Math.max(0, clipped.end - clipped.start)
+    }, 0)),
+    publicHolidayHours: roundHours(onsiteIntervals.reduce((sum, item) => {
+      const clipped = withinMonth(item)
+      return sum + (clipped.end > clipped.start ? publicHolidayMinutes(clipped.start, clipped.end) : 0)
+    }, 0)),
     incompleteDays: selectedDrafts.filter(item => item.incomplete).map(item => item.date),
     dayHours,
     nightHours,
@@ -181,6 +224,7 @@ export function analyzeMonth(months: MonthRecord[], month: string, deltaNumber: 
     operationalShiftCount: compensation.long.length,
     workdayCount: new Set(onsiteDrafts.filter(draft => draft.hours <= 13).map(draft => draft.date)).size,
     leaveDays,
+    paidVacationDays,
     minimumRestHours,
     longestRestHours,
     weeklyEquivalentHours,

@@ -275,6 +275,46 @@
   border-top: 1px solid #ffffff40;
   font-size: 14px;
 }
+.employee-workload {
+  margin-top: 10px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.employee-workload > summary {
+  display: flex;
+  min-height: 68px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+.employee-workload > summary::-webkit-details-marker { display: none; }
+.employee-workload summary b, .employee-workload summary small { display: block; }
+.employee-workload summary b { font-size: 15px; }
+.employee-workload summary small { margin-top: 3px; color: var(--muted); font-size: 12px; }
+.employee-workload summary i { font-style: normal; transition: transform 180ms ease; }
+.employee-workload[open] summary i { transform: rotate(180deg); }
+.employee-workload-content { padding: 0 10px 12px; }
+.employee-workload table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.employee-workload th, .employee-workload td { border-top: 1px solid var(--line); padding: 10px 4px; text-align: right; overflow-wrap: anywhere; }
+.employee-workload th:first-child, .employee-workload td:first-child { width: 17%; text-align: center; color: var(--muted); }
+.employee-workload th:nth-child(2) { text-align: left; }
+.employee-workload thead th { color: var(--muted); font-size: 11px; font-weight: 600; }
+.employee-workload tbody td:nth-child(3) { font-weight: 750; }
+.employee-workload tbody small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; font-weight: 400; }
+.employee-workload-own { background: var(--soft); color: var(--accent); }
+.employee-workload-content > p { margin: 12px 4px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.employee-workload-content > .employee-workload-note { padding-top: 10px; border-top: 1px solid var(--line); }
 .analysis-accounting small {
   font-size: 12px;
   line-height: 1.5;

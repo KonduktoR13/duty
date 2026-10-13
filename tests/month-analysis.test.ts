@@ -34,6 +34,24 @@ describe('monthly roster analysis', () => {
     expect(result).toMatchObject({ workHours: 32, dayHours: 24, nightHours: 8, operationalShiftCount: 1, workdayCount: 1 })
   })
 
+  it('counts public-holiday and home-duty hours from calendar intersections', () => {
+    const result = analyzeMonth([
+      record('2025-12', [{ date: '2025-12-31', kind: 'hours', raw: '24', hours: 24 }]),
+      record('2026-01', [{ date: '2026-01-05', kind: 'home', raw: 'V8', hours: 8 }]),
+    ], '2026-01', 'D12')
+    expect(result.publicHolidayHours).toBe(8)
+    expect(result.calendarHomeDutyHours).toBe(8)
+  })
+
+  it('counts only paid P days outside public holidays as vacation days', () => {
+    const result = analyzeMonth([record('2026-12', [
+      { date: '2026-12-23', kind: 'leave', raw: 'P' },
+      { date: '2026-12-24', kind: 'leave', raw: 'P' },
+      { date: '2026-12-25', kind: 'leave', raw: 'LHPu' },
+    ])], '2026-12', 'D12')
+    expect(result).toMatchObject({ leaveDays: 3, paidVacationDays: 1 })
+  })
+
   it('keeps home duty and tentative hours separate from confirmed on-site work', () => {
     const result = analyzeMonth([record('2026-08', [
       { date: '2026-08-03', kind: 'hours', raw: '12', hours: 12 },

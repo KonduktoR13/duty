@@ -202,6 +202,28 @@ header { position:relative; z-index:4; border-bottom:1px solid #e5dce9aa; paddin
 .analysis-metrics b,.analysis-metrics span { display:block; }
 .analysis-metrics b { overflow:hidden; color:#4e2763; font-size:18px; text-overflow:ellipsis; white-space:nowrap; }
 .analysis-metrics span { margin-top:2px; color:#665b6a; font-size:10px; line-height:1.25; }
+.salary-forecast { margin-top:10px; border:1px solid #e3dae7; border-radius:20px; padding:15px; background:#fff; box-shadow:0 3px 10px #24102f0d; }
+.salary-head { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.salary-head small { color:#6c5e70; font-size:10px; text-transform:uppercase; }
+.salary-forecast h2 { margin:2px 0 0; font-size:18px; }
+.salary-head button { display:grid; width:40px; height:40px; flex:none; place-items:center; border-radius:12px; background:#eee5f1; color:#582c76; font-size:18px; }
+.salary-grid { display:grid; grid-template-columns:1fr 1fr; gap:0 14px; margin-top:10px; }
+.salary-grid>div { min-width:0; border-top:1px solid #eee6f1; padding:10px 0; }
+.salary-grid span,.salary-grid b,.salary-grid small { display:block; }
+.salary-grid span { color:#665b6a; font-size:11px; }
+.salary-grid b { margin-top:3px; color:#4e2763; font-size:16px; }
+.salary-grid small { margin-top:3px; color:#746979; font-size:9px; }
+.salary-grid .salary-night b { color:#166452; }
+.salary-totals { margin-top:4px; border-radius:14px; padding:12px; background:#f2edf4; }
+.salary-totals>div { display:flex; align-items:baseline; justify-content:space-between; gap:10px; }
+.salary-totals span { color:#5d5361; font-size:11px; }
+.salary-totals b { font-size:16px; }
+.salary-totals .salary-net { margin-top:8px; border-top:1px solid #ddd2e1; padding-top:9px; }
+.salary-totals strong { color:#166452; font-size:23px; white-space:nowrap; }
+.salary-totals details { margin-top:8px; border-top:1px solid #ddd2e1; padding-top:6px; }
+.salary-totals summary { min-height:32px; cursor:pointer; color:#5d5361; font-size:10px; }
+.salary-totals details small { display:block; color:#665b6a; font-size:10px; line-height:1.45; }
+.salary-forecast>p { margin:3px 0 0; border-top:1px solid #eee6f1; padding-top:10px; color:#665b6a; font-size:10px; line-height:1.45; }
 .analysis-boundary { margin-top:10px; border:1px solid #ddbd78; border-radius:14px; padding:10px 12px; background:#fff6e1; color:#573d12; }
 .analysis-boundary b,.analysis-boundary span { display:block; }
 .analysis-boundary b { font-size:12px; }
@@ -352,7 +374,7 @@ dialog>button,.calendar-button { margin-top:16px; border-radius:12px; padding:12
   body { background:#18131c; }
   .app-content { color:#f6eff7; }
   header { border-color:#493c50; background:#211b25eb; color:#f6eff7; box-shadow:none; }
-  .calendar,.documents,.law-analysis,.analysis-metrics>div,.analysis-empty.compact,dialog,.tabs { border-color:#55465c; background:#28212d; color:#f6eff7; }
+  .calendar,.documents,.law-analysis,.salary-forecast,.analysis-metrics>div,.analysis-empty.compact,dialog,.tabs { border-color:#55465c; background:#28212d; color:#f6eff7; }
   .sync-card { border-color:#55465c; background:#28212d; }
   .sync-mark { background:#43364a; color:#e5b1f7; }
   .sync-card small { color:#d9ccdc; }
@@ -409,6 +431,15 @@ dialog>button,.calendar-button { margin-top:16px; border-radius:12px; padding:12
   .tabs button { color:#e6dbe8; }
   .tabs button.active { color:#e8a7ff; }
   .analysis-metrics b { color:#e9b2fa; }
+  .salary-head small,.salary-grid span,.salary-grid small,.salary-forecast>p { color:#ded1e1; }
+  .salary-forecast h2,.salary-grid b { color:#f6eff7; }
+  .salary-head button { background:#493b50; color:#e9b2fa; }
+  .salary-grid>div,.salary-forecast>p { border-color:#4c4051; }
+  .salary-grid .salary-night b { color:#7bd7c7; }
+  .salary-totals { background:#3a303e; }
+  .salary-totals span,.salary-totals summary,.salary-totals details small { color:#ded1e1; }
+  .salary-totals .salary-net,.salary-totals details { border-color:#55465c; }
+  .salary-totals strong { color:#7bd7c7; }
   .analysis-mode,.analysis-context,.analysis-metrics span,.law-intro,.analysis-rule summary small,.analysis-rule>p,.analysis-empty p { color:#ded1e1; }
   .analysis-boundary { border-color:#9a742e; background:#49391f; color:#fff0cf; }
   .analysis-verdict { border-color:#3c7968; background:#203f38; color:#d8fff3; }

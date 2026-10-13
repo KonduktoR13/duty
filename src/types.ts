@@ -53,6 +53,19 @@ export type GoogleIntegrationSettings = {
   calendarReminders?: CalendarReminderSettings
 }
 
+export type SalarySettings = {
+  baseSalary: number
+  replacementEnabled: boolean
+  replacementPercent: number
+  vacationEnabled: boolean
+  vacationDailyRate: number
+  incomeTaxPercent: number
+  taxFreeAllowance: number
+  unemploymentPercent: number
+  fundedPensionPercent: number
+  homeDutyPercent: number
+}
+
 export type MonthRecord = {
   id: string
   fileName: string

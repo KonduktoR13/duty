@@ -44,3 +44,8 @@ it('preserves the installation ID and account history without OAuth tokens', asy
   expect(result.settings[0]).toEqual(['installationId', 'installation-1'])
   expect(result.settings[1][1]).not.toHaveProperty('access_token')
 })
+it('accepts local salary forecast settings in a backup', async () => {
+  const salary = { baseSalary: 2170, replacementEnabled: true, replacementPercent: 16.0184 }
+  const result = await readBackup(new Blob([JSON.stringify({ ...base, settings: [['salarySettings', salary]] })]))
+  expect(result.settings).toEqual([['salarySettings', salary]])
+})
