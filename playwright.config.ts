@@ -3,6 +3,7 @@ export default defineConfig({
   testDir: './e2e',
   fullyParallel: true,
   retries: process.env.CI ? 1 : 0,
+  reporter: process.env.CI ? [['list'], ['github']] : 'list',
   use: {
     baseURL: 'http://127.0.0.1:4174',
     locale: 'ru-RU',
