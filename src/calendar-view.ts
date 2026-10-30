@@ -343,14 +343,6 @@ export function createCalendarView(state: CalendarViewState) {
       '<nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' +
       humanMonth(month.id) +
       '</span></button><button id="next" aria-label="Следующий месяц">›</button></nav>'
-    if (!candidateForMonth(month, currentDelta))
-      return (
-        toolbar +
-        navigation +
-        '<section class="analysis-empty compact"><h2>Нет графика для ' +
-        esc(currentDelta) +
-        '</h2><p>Загрузите PDF за этот месяц или выберите другой номер.</p><button class="primary" id="import">Импортировать PDF</button></section>'
-      )
     if (calendarMode === 'list') {
       const rows = [...marksByDate]
         .filter(([day]) => day.startsWith(month.id + '-'))
