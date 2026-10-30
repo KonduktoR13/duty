@@ -2,7 +2,7 @@ import type { WorkInterval } from "./intervals";
 import { humanMonth } from "./schedule";
 import { candidateForMonth } from "./roster";
 import { analyzeMonth, type AnalysisCheck } from "./month-analysis";
-import { esc } from "./ui";
+import { esc, icon } from "./ui";
 import { salaryForecast } from "./salary-calculation";
 import {
   rankEmployeeWorkload,
@@ -95,7 +95,7 @@ function employeeWorkloadView(
   ) =>
     `<th scope="col" class="employee-workload-sort" aria-sort="${sort === mode ? "descending" : "none"}"><button id="employee-workload-sort-${mode}" data-workload-sort="${mode}" aria-label="${description}, по убыванию">${label}${sort === mode ? ' <span aria-hidden="true">↓</span>' : ""}</button></th>`;
   return `<details class="employee-workload" id="employee-workload" data-month="${esc(monthId)}" data-sort="${sort}">
-    <summary id="employee-workload-toggle"><span><b>Нагрузка сотрудников</b><small>D-номеров: ${rows.length}${position} · ${sortLabel}</small></span><i aria-hidden="true">⌄</i></summary>
+    <summary id="employee-workload-toggle"><span class="employee-workload-icon" aria-hidden="true">${icon("analysis")}</span><span class="employee-workload-copy"><b>Нагрузка сотрудников</b><small>D-номеров: ${rows.length}${position} · ${sortLabel}</small></span><i aria-hidden="true">⌄</i></summary>
     <div class="employee-workload-content">
       <table aria-label="Рейтинг сотрудников по рабочим часам за ${esc(humanMonth(monthId))}" aria-describedby="employee-workload-note">
         <thead><tr><th scope="col">Место</th><th scope="col">D-номер</th>${sortHeader("month", "Месяц, ч", "Сортировать по часам за месяц")}${sortHeader("total", "Всего, ч", "Сортировать по общим часам")}</tr></thead>

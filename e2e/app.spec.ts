@@ -281,3 +281,78 @@ test('PWA update waits for the import confirmation and retains saved data', asyn
     server.close()
   }
 })
+
+test('swiping from a calendar day never opens day details or the add editor', async ({ page }) => {
+  await page.goto('/')
+  await importRoster(page)
+  const day = page.locator('[data-day="2026-09-16"]')
+  await day.scrollIntoViewIfNeeded()
+  const box = (await day.boundingBox())!
+  const x = box.x + box.width / 2, y = box.y + box.height / 2
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  // The first small move starts the month transition and replaces its cells.
+  // Subsequent move/up events must still cancel the original day's hold timer.
+  await page.mouse.move(x + 9, y)
+  await page.mouse.move(x + 110, y, { steps: 5 })
+  await page.mouse.up()
+  await expect(page.locator('#picker')).toContainText('август', { ignoreCase: true })
+  await page.waitForTimeout(750)
+  await expect(page.locator('#dialog')).not.toBeVisible()
+  await expect(page.locator('#shift-details')).toHaveCount(0)
+  // An intentional tap on the new month still works normally.
+  await page.locator('[data-day="2026-08-16"]').click()
+  await expect(page.locator('#shift-details')).toBeVisible()
+})
+
+test('a slow cancelled calendar drag cancels long press without opening a day', async ({ page }) => {
+  await page.goto('/')
+  await importRoster(page)
+  const day = page.locator('[data-day="2026-09-16"]')
+  await day.scrollIntoViewIfNeeded()
+  const box = (await day.boundingBox())!
+  const x = box.x + box.width / 2, y = box.y + box.height / 2
+  await page.mouse.move(x, y)
+  await page.mouse.down()
+  await page.mouse.move(x + 9, y)
+  await page.mouse.move(x + 25, y)
+  await page.waitForTimeout(600)
+  await page.mouse.up()
+  await page.waitForTimeout(750)
+  await expect(page.locator('#picker')).toContainText('сентябрь', { ignoreCase: true })
+  await expect(page.locator('#dialog')).not.toBeVisible()
+  await expect(page.locator('#shift-details')).toHaveCount(0)
+  const restored = (await page.locator('[data-day="2026-09-16"]').boundingBox())!
+  await page.mouse.move(restored.x + restored.width / 2, restored.y + restored.height / 2)
+  await page.mouse.down()
+  await page.waitForTimeout(600)
+  await page.mouse.up()
+  await expect(page.locator('[name="start"]')).toHaveValue('2026-09-16')
+})
+
+test.describe('touch calendar gestures', () => {
+  test.use({ hasTouch: true, isMobile: true })
+  test('touch swipes across day cells in both directions do not activate a day', async ({ page, context }) => {
+    await page.goto('/')
+    await importRoster(page)
+    const input = await context.newCDPSession(page)
+    for (const [date, delta, target] of [['2026-09-16', 110, 'август'], ['2026-08-19', -110, 'сентябрь']] as const) {
+      const day = page.locator('[data-day="' + date + '"]')
+      await day.scrollIntoViewIfNeeded()
+      const box = (await day.boundingBox())!
+      const x = box.x + box.width / 2, y = box.y + box.height / 2
+      await input.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] })
+      for (const distance of [9, 35, Math.abs(delta)]) {
+        await input.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x: x + Math.sign(delta) * distance, y }] })
+        await page.waitForTimeout(25)
+      }
+      await input.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+      await expect(page.locator('#picker')).toContainText(target, { ignoreCase: true })
+      await page.waitForTimeout(750)
+      await expect(page.locator('#dialog')).not.toBeVisible()
+      await expect(page.locator('#shift-details')).toHaveCount(0)
+    }
+    await page.locator('[data-day="2026-09-16"]').tap()
+    await expect(page.locator('#shift-details')).toBeVisible()
+  })
+})

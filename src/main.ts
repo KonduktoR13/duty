@@ -222,6 +222,10 @@ let lastUpdateCheck = 0;
 let monthTransitioning = false;
 let calendarGestureActive = false;
 let ignoreDayClicksUntil = 0;
+// These callbacks follow the current render; document-level pointer events
+// still reach them after a swipe replaces the original day button.
+let cancelDayHold: () => void = () => {};
+let moveDayHold: (event: PointerEvent) => void = () => {};
 let legacyNeedsReimport: string[] = [];
 let calendarSyncs: CalendarMonthSync[] = [];
 let googleSettings: GoogleIntegrationSettings = { enabled: false };
@@ -881,10 +885,23 @@ function bind() {
   document
     .querySelector("#add-day-personal")
     ?.addEventListener("click", () => beginPersonal());
+  cancelDayHold();
   let held: number | undefined, origin: { x: number; y: number } | undefined;
+  let holdPointer: number | null = null;
   const cancelHold = () => {
     clearTimeout(held);
     held = undefined;
+    origin = undefined;
+    holdPointer = null;
+  };
+  cancelDayHold = cancelHold;
+  moveDayHold = (event) => {
+    if (
+      origin &&
+      event.pointerId === holdPointer &&
+      Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 8
+    )
+      cancelHold();
   };
   document
     .querySelectorAll<HTMLElement>("[data-day],[data-agenda-day]")
@@ -893,25 +910,21 @@ function bind() {
         if (
           !event.isPrimary ||
           event.button !== 0 ||
+          monthTransitioning ||
+          calendarGestureActive ||
           (personalSettings.owner && currentDelta !== personalSettings.owner)
         )
           return;
+        holdPointer = event.pointerId;
         origin = { x: event.clientX, y: event.clientY };
         held = window.setTimeout(() => {
+          cancelHold();
+          if (!cell.isConnected || monthTransitioning || calendarGestureActive)
+            return;
           ignoreDayClicksUntil = Date.now() + 1000;
           beginPersonal(cell.dataset.day || cell.dataset.agendaDay);
-          cancelHold();
         }, 480);
       });
-      cell.addEventListener("pointermove", (event) => {
-        if (
-          origin &&
-          Math.hypot(event.clientX - origin.x, event.clientY - origin.y) > 10
-        )
-          cancelHold();
-      });
-      for (const type of ["pointerup", "pointercancel", "lostpointercapture"])
-        cell.addEventListener(type, cancelHold);
     });
   bindBackups();
   document.querySelectorAll<HTMLButtonElement>("[data-restore-month]").forEach(
@@ -1111,6 +1124,12 @@ function bind() {
 }
 
 function selectDay(value: string) {
+  if (
+    monthTransitioning ||
+    calendarGestureActive ||
+    Date.now() < ignoreDayClicksUntil
+  )
+    return;
   if (selectedDate === value) {
     closeDayDetails();
     return;
@@ -1236,12 +1255,10 @@ function cancelMonthTransition(prepared: PreparedMonthTransition) {
     complete = true;
     prepared.track.classList.remove("animating");
     prepared.track.style.transform = "";
-    prepared.track.innerHTML = calendarPage(
-      prepared.current,
-      groupMarks(allMarks()),
-    );
     monthTransitioning = false;
-    setMonthNavigationDisabled(false);
+    // The drag replaced day nodes. Re-render to restore their hold handlers
+    // and personal markers, including when the month stays the same.
+    render();
   };
   prepared.track.addEventListener(
     "transitionend",
@@ -1289,7 +1306,7 @@ function enableCalendarSwipe() {
     return true;
   };
   calendar.addEventListener("pointerdown", (event) => {
-    if (monthTransitioning) return;
+    if (monthTransitioning || !event.isPrimary || event.button !== 0) return;
     pointerId = event.pointerId;
     startX = lastX = event.clientX;
     startY = event.clientY;
@@ -1303,6 +1320,7 @@ function enableCalendarSwipe() {
     const dx = event.clientX - startX;
     const dy = event.clientY - startY;
     if (!horizontal && Math.abs(dx) > 8 && Math.abs(dx) > Math.abs(dy)) {
+      cancelDayHold();
       horizontal = true;
       calendar.setPointerCapture(event.pointerId);
       const direction = dx < 0 ? 1 : -1;
@@ -2463,14 +2481,12 @@ function showCustomCalendarReminders(initial: number[]) {
       );
       renderEditor();
     });
-    document
-      .querySelector("#save-reminders")
-      ?.addEventListener("click", () =>
-        confirmCalendarReminderSettings({
-          mode: "custom",
-          minutes: selectedMinutes,
-        }),
-      );
+    document.querySelector("#save-reminders")?.addEventListener("click", () =>
+      confirmCalendarReminderSettings({
+        mode: "custom",
+        minutes: selectedMinutes,
+      }),
+    );
   };
   renderEditor();
 }
@@ -3009,6 +3025,21 @@ document.addEventListener(
   },
   true,
 );
+for (const type of [
+  "pointerdown",
+  "pointerup",
+  "pointercancel",
+  "lostpointercapture",
+] as const)
+  document.addEventListener(type, () => cancelDayHold(), {
+    capture: true,
+    passive: true,
+  });
+document.addEventListener("pointermove", (event) => moveDayHold(event), {
+  capture: true,
+  passive: true,
+});
+window.addEventListener("blur", () => cancelDayHold());
 window.addEventListener("offline", networkChanged);
 window.addEventListener("unhandledrejection", (event) => {
   event.preventDefault();
