@@ -458,6 +458,10 @@ function render() {
     section === "analysis" &&
     previousWorkload?.dataset.month === selected &&
     previousWorkload.open;
+  const workloadExplanationExpanded =
+    workloadExpanded &&
+    previousWorkload?.querySelector<HTMLDetailsElement>(".workload-explanation")
+      ?.open;
   const focused = document.activeElement as HTMLElement | null;
   const focusId = focused?.id;
   const focusDay = focused?.dataset.day;
@@ -573,7 +577,13 @@ function render() {
   bindPersonalActions();
   const workload =
     document.querySelector<HTMLDetailsElement>("#employee-workload");
-  if (workload) workload.open = Boolean(workloadExpanded);
+  if (workload) {
+    workload.open = Boolean(workloadExpanded);
+    const explanation = workload.querySelector<HTMLDetailsElement>(
+      ".workload-explanation",
+    );
+    if (explanation) explanation.open = Boolean(workloadExplanationExpanded);
+  }
   document
     .querySelectorAll<HTMLButtonElement>("[data-section]")
     .forEach((button) => {

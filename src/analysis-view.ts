@@ -93,24 +93,27 @@ function employeeWorkloadView(
     label: string,
     description: string,
   ) =>
-    `<th scope="col" class="employee-workload-sort" aria-sort="${sort === mode ? "descending" : "none"}"><button id="employee-workload-sort-${mode}" data-workload-sort="${mode}" aria-label="${description}, по убыванию">${label}${sort === mode ? ' <span aria-hidden="true">↓</span>' : ""}</button></th>`;
+    `<th scope="col" class="employee-workload-sort" aria-sort="${sort === mode ? "descending" : "none"}"><button id="employee-workload-sort-${mode}" data-workload-sort="${mode}" aria-label="${description}, по убыванию"><span class="workload-metric-header"><span>${label}</span><span class="workload-sort-arrow" aria-hidden="true">${sort === mode ? "↓" : "↕"}</span></span></button></th>`;
   return `<details class="employee-workload" id="employee-workload" data-month="${esc(monthId)}" data-sort="${sort}">
     <summary id="employee-workload-toggle"><span class="employee-workload-icon" aria-hidden="true">${icon("analysis")}</span><span class="employee-workload-copy"><b>Нагрузка сотрудников</b><small>D-номеров: ${rows.length}${position} · ${sortLabel}</small></span><i aria-hidden="true">⌄</i></summary>
     <div class="employee-workload-content">
       <table aria-label="Рейтинг сотрудников по рабочим часам за ${esc(humanMonth(monthId))}" aria-describedby="employee-workload-note">
-        <thead><tr><th scope="col">Место</th><th scope="col">D-номер</th>${sortHeader("month", "Месяц, ч", "Сортировать по часам за месяц")}${sortHeader("total", "Всего, ч", "Сортировать по общим часам")}</tr></thead>
+        <caption>Часы · ${esc(humanMonth(monthId))}</caption>
+        <colgroup><col class="workload-rank-col"><col class="workload-employee-col"><col class="workload-hours-col"><col class="workload-hours-col"></colgroup>
+        <thead><tr><th scope="col" aria-label="Место в рейтинге">№</th><th scope="col">D-номер</th>${sortHeader("month", "Месяц", "Сортировать по часам за месяц")}${sortHeader("total", "Всего", "Сортировать по общим часам")}</tr></thead>
         <tbody>${rows
           .map(
             (
               row,
             ) => `<tr${row.deltaNumber === currentDelta ? ' class="employee-workload-own"' : ""}>
-          <td>${row.rank}</td><th scope="row">${esc(row.deltaNumber)}${row.deltaNumber === currentDelta ? "<small>Вы</small>" : ""}</th>
-          <td>${String(row.monthHours).replace(".", ",")}</td><td>${String(row.totalHours).replace(".", ",")}${row.availableMonths < months.length ? `<small>${row.availableMonths} из ${months.length} мес.</small>` : ""}</td>
+          <td class="workload-rank">${row.rank}</td><th scope="row"><span class="workload-employee">${esc(row.deltaNumber)}${row.deltaNumber === currentDelta ? '<small class="workload-you">Вы</small>' : ""}</span></th>
+          <td><span class="workload-hours">${String(row.monthHours).replace(".", ",")}</span></td><td><span class="workload-hours">${String(row.totalHours).replace(".", ",")}</span>${row.availableMonths < months.length ? `<small class="workload-coverage">${row.availableMonths} из ${months.length} мес.</small>` : ""}</td>
         </tr>`,
           )
           .join("")}</tbody>
       </table>
-      <p id="employee-workload-note">Нажмите «Месяц, ч» или «Всего, ч», чтобы выбрать сортировку по убыванию. Переходящие смены делятся по полуночи; V и возможные выходы # не включены. Всего — за загруженные месяцы (${months.length}). Без соседних графиков данные на границах могут быть неполными.</p>
+      <p class="workload-sort-hint">Нажмите заголовок, чтобы сравнить по месяцу или общей сумме.</p>
+      <details class="workload-explanation"><summary>Как считаются часы</summary><p id="employee-workload-note">Сортировка — по убыванию. При равных часах сотрудники делят место. Переходящие смены делятся по полуночи; V и возможные выходы # не включены. Всего — за загруженные месяцы (${months.length}). Без соседних графиков данные на границах могут быть неполными.</p></details>
       ${sourceRosterIncomplete(months, monthId) ? '<p class="employee-workload-note">В сохранённом графике доступны не все D-номера. Для полного списка импортируйте PDF повторно.</p>' : ""}
     </div>
   </details>`;

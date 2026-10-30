@@ -321,26 +321,98 @@
 .employee-workload summary small { margin-top: 3px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .employee-workload summary i { display: grid; width: 28px; height: 28px; flex: none; place-items: center; border-radius: 50%; background: var(--soft); color: var(--accent); font-style: normal; transition: transform 180ms ease; }
 .employee-workload[open] summary i { transform: rotate(180deg); }
-.employee-workload-content { padding: 0 10px 12px; }
+.employee-workload-content { padding: 0 16px 16px; }
 .employee-workload table {
   width: 100%;
-  border-collapse: collapse;
+  border-collapse: separate;
+  border-spacing: 0;
   table-layout: fixed;
   font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
-.employee-workload th, .employee-workload td { border-top: 1px solid var(--line); padding: 10px 4px; text-align: right; overflow-wrap: anywhere; }
-.employee-workload th:first-child, .employee-workload td:first-child { width: 17%; text-align: center; color: var(--muted); }
-.employee-workload th:nth-child(2) { text-align: left; }
-.employee-workload thead th { color: var(--muted); font-size: 11px; font-weight: 600; }
-.employee-workload[data-sort='month'] tbody td:nth-child(3), .employee-workload[data-sort='total'] tbody td:nth-child(4) { font-weight: 750; }
-.employee-workload thead .employee-workload-sort { padding: 0; }
-.employee-workload-sort button { width: 100%; min-height: 44px; padding: 10px 4px; border-radius: 8px; background: transparent; color: var(--muted); font-size: inherit; text-align: right; text-decoration: underline dotted; text-underline-offset: 3px; }
-.employee-workload-sort[aria-sort='descending'] button { background: var(--soft); color: var(--accent); font-weight: 750; text-decoration: none; }
-.employee-workload tbody small { display: block; margin-top: 3px; color: var(--muted); font-size: 10px; font-weight: 400; }
-.employee-workload-own { background: var(--soft); color: var(--accent); }
-.employee-workload-content > p { margin: 12px 4px 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
-.employee-workload-content > .employee-workload-note { padding-top: 10px; border-top: 1px solid var(--line); }
+.employee-workload caption {
+  padding: 12px 4px 6px;
+  text-align: left;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.workload-rank-col { width: 10%; }
+.workload-employee-col { width: 30%; }
+.workload-hours-col { width: 30%; }
+.employee-workload th, .employee-workload td {
+  border-bottom: 1px solid var(--line);
+  padding: 12px 8px;
+  text-align: center;
+  vertical-align: middle;
+  line-height: 1.4;
+}
+.employee-workload th:first-child, .employee-workload td:first-child {
+  padding-inline: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+}
+.employee-workload th:nth-child(2) { padding-inline: 6px; text-align: left; }
+.employee-workload thead th { color: var(--muted); font-size: 12px; font-weight: 500; }
+.employee-workload thead .employee-workload-sort { padding: 0 8px; }
+.employee-workload-sort button {
+  display: block;
+  width: 100%;
+  min-height: 44px;
+  padding: 8px 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: inherit;
+}
+.workload-metric-header {
+  display: flex;
+  width: 64px;
+  max-width: 100%;
+  margin-inline: auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  white-space: nowrap;
+}
+.workload-sort-arrow { width: 10px; flex: none; opacity: .55; }
+.employee-workload-sort[aria-sort='descending'] button {
+  color: var(--accent);
+  font-weight: 750;
+  box-shadow: inset 0 -2px var(--accent);
+}
+.employee-workload-sort[aria-sort='descending'] .workload-sort-arrow { opacity: 1; }
+.employee-workload-sort button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.workload-hours {
+  display: block;
+  width: 64px;
+  max-width: 100%;
+  margin-inline: auto;
+  text-align: right;
+  white-space: nowrap;
+  font-size: 14px;
+  font-weight: 500;
+}
+.employee-workload[data-sort='month'] tbody td:nth-child(3) .workload-hours,
+.employee-workload[data-sort='total'] tbody td:nth-child(4) .workload-hours { color: var(--accent); font-weight: 750; }
+.workload-employee { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 5px; font-size: 14px; font-weight: 650; }
+.employee-workload .workload-you { display: inline-block; padding: 1px 4px; border-radius: 5px; font-size: 9px; font-weight: 650; line-height: 1.5; color: var(--accent); background: var(--surface); }
+.employee-workload .workload-coverage { display: block; margin: 3px auto 0; width: 64px; max-width: 100%; text-align: right; font-size: 10px; font-weight: 400; line-height: 1.4; color: var(--muted); }
+.employee-workload-own > * { background: var(--soft); }
+.employee-workload-own > :first-child { border-left: 2px solid var(--accent); border-radius: 8px 0 0 8px; }
+.employee-workload-own > :last-child { border-radius: 0 8px 8px 0; }
+.employee-workload tbody tr:last-child > * { border-bottom: 0; }
+.employee-workload-content > .workload-sort-hint { margin: 12px 2px 0; font-size: 11px; line-height: 1.5; color: var(--muted); }
+.employee-workload .workload-explanation { margin-top: 4px; }
+.employee-workload .workload-explanation > summary { min-height: 40px; padding: 9px 2px; color: var(--muted); font-size: 12px; cursor: pointer; }
+.employee-workload .workload-explanation p, .employee-workload-note { margin: 0 2px 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+@media(max-width:340px) {
+  .employee-workload-content { padding-inline: 12px; }
+  .employee-workload th, .employee-workload td { padding-inline: 5px; }
+  .employee-workload thead .employee-workload-sort { padding-inline: 5px; }
+  .workload-metric-header { gap: 2px; }
+}
 .analysis-accounting small {
   font-size: 12px;
   line-height: 1.5;
