@@ -152,6 +152,8 @@ test("manual koduvalve follows a 22-hour shift, supports arbitrary time, editing
   await expect(page.locator('#dialog h2')).toHaveText("Изменить запись");
   await page.locator('[name="endTime"]').fill("09:15");
   await page.locator("#save-event").click();
+  await expect(page.locator("#dialog")).not.toBeVisible();
+  await expect(page.locator(".personal-day-content [data-edit-event]")).toContainText("06:00–09:15");
   await page.reload();
   await page.locator("#list-mode").click();
   await expect(page.locator('.personal-event-row')).toContainText("06:00–09:15");
