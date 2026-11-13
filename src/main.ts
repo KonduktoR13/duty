@@ -1,3 +1,4 @@
+import { updateHistoryView } from "./update-history";
 import {
   defaultPersonalSettings,
   type PersonalEvent,
@@ -2044,6 +2045,7 @@ function showSettings() {
     salaryGroup.append(b);
   }
   document.querySelector("#close")?.addEventListener("click", close);
+  document.querySelector("#updates-settings")?.addEventListener("click", showUpdateHistory);
   const storageStatus = document.querySelector<HTMLElement>(
     "#dialog .storage-status",
   )!;
@@ -2084,6 +2086,20 @@ function showSettings() {
       close();
       await refresh();
     }
+  });
+}
+
+function showUpdateHistory() {
+  const scroll = document.querySelector("#dialog .dialog-content")?.scrollTop || 0;
+  open(updateHistoryView(), "settings");
+  document.querySelector("#updates-close")?.addEventListener("click", close);
+  document.querySelector("#updates-back")?.addEventListener("click", () => {
+    showSettings();
+    requestAnimationFrame(() => {
+      const content = document.querySelector("#dialog .dialog-content");
+      if (content) content.scrollTop = scroll;
+      document.querySelector<HTMLElement>("#updates-settings")?.focus({ preventScroll: true });
+    });
   });
 }
 

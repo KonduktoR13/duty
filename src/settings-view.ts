@@ -44,6 +44,7 @@ export function settingsView({
         <details class="storage-details"><summary>О хранении данных</summary><p class="storage-status" role="status">Проверяем хранилище…</p></details>
       </section>
       <nav class="settings-legal" aria-label="Информация о приложении"><a href="privacy/" target="_blank" rel="noopener">Конфиденциальность</a><a href="terms/" target="_blank" rel="noopener">Условия использования</a></nav>
+      <button class="settings-row" id="updates-settings"><span><b>История обновлений</b><small>Версии, даты и изменения</small></span><i aria-hidden="true">›</i></button>
       <p class="settings-version">Версия ${__APP_VERSION__}</p>
       <details class="settings-danger"><summary>Удаление данных</summary><p>Удаляет графики, PDF и настройки из этого браузера. События Google останутся.</p><button class="danger" id="wipe">Удалить все локальные данные</button></details>
     </div>
