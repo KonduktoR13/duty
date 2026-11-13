@@ -53,3 +53,9 @@ describe('D-number roster selection', () => {
     expect(foreignEntriesForDate([sharedDay], '2026-08', 'D12', '2026-08-03').map(entry => entry.deltaNumber)).toEqual(['D40', 'D14'])
   })
 })
+
+
+it('upgrades stored P-et annotations for every employee without reimport', () => {
+  const m: MonthRecord = { id: '2026-12', fileName: 'demo.pdf', importedAt: 1, hash: 'x', shifts: [], deltaNumber: 'D12', status: 'local', marks: [{ date: '2026-12-31', kind: 'other', raw: 'P-et' }] };
+  expect(allMarksForDelta([m], 'D12')).toContainEqual({ date: '2026-12-31', kind: 'leave', raw: 'P-et' });
+});

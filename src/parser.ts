@@ -79,7 +79,7 @@ function nonEmpty(value: string) {
 function parseCell(date: string, value: string): DayMark[] {
   const raw = value.replace(/\s/g, '')
   if (!nonEmpty(raw)) return []
-  const leave = /^P$/i.test(raw) ? 'P' : /^LHPu$/i.test(raw) ? 'LHPu' : null
+  const leave = /^P$/i.test(raw) ? 'P' : /^P-et$/i.test(raw) ? 'P-et' : /^LHPu$/i.test(raw) ? 'LHPu' : null
   if (leave) return [{ date, kind: 'leave', raw: leave }]
 
   // A cell can contain both a normal day entry and a V-entry on its second
@@ -96,7 +96,7 @@ function parseCell(date: string, value: string): DayMark[] {
   const knownWork = /^(?:\d+P?|V\d+(?:[,.]\d+)?)+$/i
   if (!knownWork.test(raw)) {
     const otherAndHome = raw.match(/^(.+?)((?:V\d+(?:[,.]\d+)?)+)$/i)
-    if (otherAndHome) return [{ date, kind: 'other', raw: otherAndHome[1] }, ...parseCell(date, otherAndHome[2])]
+    if (otherAndHome) return [...parseCell(date, otherAndHome[1]), ...parseCell(date, otherAndHome[2])]
     return [{ date, kind: 'other', raw }]
   }
   const parts = raw.match(/V\d+(?:[,.]\d+)?|\d+P?/gi) || []

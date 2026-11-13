@@ -97,7 +97,7 @@ describe.skipIf(!local)('reference Delta PDFs', () => {
     const d36 = aprilSchedule.candidates.find(candidate => candidate.number === 'D36')!
     expect(d36.marks).toContainEqual({ date: '2026-04-09', kind: 'other', raw: 'Õ' })
     expect(juneSchedule.candidates.find(candidate => candidate.number === 'D11')!.marks).toContainEqual({ date: '2026-06-01', kind: 'other', raw: 'TK4' })
-    expect(augustSchedule.candidates.find(candidate => candidate.number === 'D34')!.marks.some(mark => mark.kind === 'other' && mark.raw === 'P-et')).toBe(true)
+    expect(augustSchedule.candidates.find(candidate => candidate.number === 'D34')!.marks.some(mark => mark.kind === 'leave' && mark.raw === 'P-et')).toBe(true)
   })
 
   it('uses 16 only as an end-of-month boundary fragment in the reference PDFs', async () => {
@@ -136,3 +136,14 @@ describe.skipIf(!local)('reference Delta PDFs', () => {
     expect(normalizeCrossMonth(d36)).toEqual(d36)
   })
 })
+
+
+const suppliedDecember = process.env.PWA_DECEMBER_PDF;
+it.skipIf(!suppliedDecember || !existsSync(suppliedDecember))('reads the supplied December PDF locally without committing personal data', async () => {
+  const parsed = await parseSource(new URL('file://' + suppliedDecember!));
+  const d12 = parsed.candidates.find(c => c.number === 'D12')!;
+  expect(d12.leaveDates).toHaveLength(10);
+  expect(d12.leaveCodes['2026-12-31']).toBe('P-et');
+  expect(d12.shifts).toContainEqual({ date: '2026-12-14', code: '22', hours: 22 });
+  expect(d12.marks.some(m => m.kind === 'other')).toBe(false);
+});

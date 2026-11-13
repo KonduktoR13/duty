@@ -377,3 +377,64 @@ it("confirmation of one accounting period cannot automatically confirm the follo
   expect(periodBalance(c, "2026-01")?.confirmed).toBe(true);
   expect(periodBalance(c, "2026-02")?.confirmed).toBe(false);
 });
+
+
+describe("manual koduvalve", () => {
+  const home = () => event({ kind: "home", start: "2026-12-15", end: "2026-12-15", startTime: "06:00", endTime: "08:00" });
+  const source = () => month("2026-12", [{ date: "2026-12-14", kind: "hours", raw: "22", hours: 22 }]);
+  it("adds a separate paid home interval after 22 hours without overtime or night premiums", () => {
+    const a = personalForecast(ctx([], [source()]), "2026-12");
+    const b = personalForecast(ctx([home()], [source()]), "2026-12");
+    expect(b.plan.conflicts).toEqual([]);
+    expect(b.stat.work).toBe(22);
+    expect(b.stat.home).toBe(2);
+    expect(b.stat.night).toBe(a.stat.night);
+    expect(b.stat.extra).toBe(0);
+    expect(b.legacy.homeDutyPremium).toBe(Math.round(b.legacy.homeDutyHourlyPremium * 2 * 100) / 100);
+    expect(b.gross - a.gross).toBeCloseTo(b.legacy.homeDutyPremium, 2);
+    expect(b.lines.find(l => l.id === b.plan.events[0].id)?.employer).toBe(b.legacy.homeDutyPremium);
+    expect(personalDrafts(b.plan, "2026-12", "D12", []).find(d => d.kind === "home")).toMatchObject({ hours: 2, start: { dateTime: "2026-12-15T06:00:00" } });
+  });
+  it("splits arbitrary minutes at month boundary and excludes holiday and night premiums", () => {
+    const e = event({ kind: "home", start: "2026-12-31", end: "2027-01-01", startTime: "23:30", endTime: "01:15" });
+    const a = personalForecast(ctx([e]), "2026-12"), b = personalForecast(ctx([e]), "2027-01");
+    expect(a.stat.home).toBe(.5);
+    expect(b.stat.home).toBe(1.25);
+    expect(b.stat.night).toBe(0);
+    expect(b.stat.festive).toBe(0);
+    expect(b.stat.work).toBe(0);
+  });
+  it("rejects overlaps with onsite work and prevents duplicate imported home hours", () => {
+    const e = home();
+    const m = month("2026-12", [{ date: e.start, kind: "home", raw: "V8", hours: 8 }]);
+    const overlap = event({ ...e, startTime: "06:00", endTime: "08:00" });
+    expect(personalPlan([m], "D12", [overlap]).conflicts).toEqual([overlap.id]);
+    const exact = event({ ...e, startTime: "00:00", endTime: "08:00", linkConfirmed: true, linkedKey: personalPlan([m], "D12", []).original[0].key });
+    expect(intervalStats(personalPlan([m], "D12", [exact]).work).home).toBe(8);
+    expect(personalPlan([source()], "D12", [event({ ...e, startTime: "05:00" })]).conflicts).toEqual([e.id]);
+  });
+  it("validates manual home times, owner and maximum duration with the work schema", () => {
+    expect(() => event({ kind: "home" })).toThrow();
+    expect(() => event({ ...home(), end: "2026-12-18" })).toThrow();
+    const e = home();
+    expect(personalPlan([], "D40", [e]).work).toEqual([]);
+  });
+  it("treats P-et as paid vacation and avoids double payment with a manual vacation", () => {
+    const m = month("2026-12", [{ date: "2026-12-31", kind: "leave", raw: "P-et" }]);
+    expect(personalForecast(ctx([], [m]), "2026-12").vacation).toBe(DEFAULT_SALARY_SETTINGS.vacationDailyRate);
+    const e = event({ kind: "vacation", start: "2026-12-31", end: "2026-12-31", rateMode: "benefit", daily: 100, absenceMode: "calendar" });
+    expect(personalForecast(ctx([e], [m]), "2026-12").vacation).toBe(100);
+  });
+});
+
+
+it("manual home pay details follow salary changes inside the month", () => {
+  const e = event({ kind: "home", start: "2026-10-15", end: "2026-10-16", startTime: "23:00", endTime: "01:00" });
+  const c = ctx([e]);
+  c.config.salaryHistory = [{ from: "2026-10-16", baseSalary: 3000, replacementEnabled: false, replacementPercent: 0 }];
+  const f = personalForecast(c, "2026-10");
+  const rounded = (x: number) => Math.round(x * 100) / 100;
+  const expected = rounded(rounded(DEFAULT_SALARY_SETTINGS.baseSalary / f.legacy.normHours * .12) + rounded(3000 / f.legacy.normHours * .12));
+  expect(f.legacy.homeDutyPremium).toBe(expected);
+  expect(f.lines.find(l => l.id === e.id)?.employer).toBe(expected);
+});

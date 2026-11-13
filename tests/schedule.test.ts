@@ -106,3 +106,16 @@ describe('PDF parsing primitives', () => {
     expect(candidate.shifts).toEqual([{ date: '2026-02-01', hours: 5, code: 'V5' }])
   })
 })
+
+
+it('recognizes supplementary P-et leave in normal and rotated coordinate tables', () => {
+  const glyphs = Array.from({ length: 31 }, (_, i) => ({ text: String(i + 1), x: 60 + i * 20, y: 0, width: 6 }));
+  glyphs.push({ text: 'D12', x: 0, y: 30, width: 16 }, { text: 'P', x: 640, y: 30, width: 6 }, { text: 'P-et', x: 660, y: 30, width: 15 });
+  for (const values of [glyphs, glyphs.map(g => ({ ...g, x: g.y, y: g.x }))]) {
+    const candidate = parseGlyphs(values, 'Detsember 2026').candidates[0];
+    expect(candidate.leaveCodes['2026-12-31']).toBe('P-et');
+    expect(candidate.marks).toContainEqual({ date: '2026-12-31', kind: 'leave', raw: 'P-et' });
+    expect(candidate.confidence).toBe('high');
+    expect(candidate.shifts).toEqual([]);
+  }
+});

@@ -266,7 +266,7 @@ export function openEventEditor(
       draft.start.slice(0, 7),
     );
     if (isWork(draft))
-      el.textContent = `${hoursLabel((eventBounds(draft).end - eventBounds(draft).start) / 60)} · ${draft.compensation === "rest" ? "Компенсация отдыхом" : `Изменение bruto работодателя: ≈ ${euros(forecast.gross - before.gross)}`} · ${draft.status === "planned" ? "План" : "Внесённая работа"}`;
+      el.textContent = `${hoursLabel((eventBounds(draft).end - eventBounds(draft).start) / 60)} · ${draft.kind !== "home" && draft.compensation === "rest" ? "Компенсация отдыхом" : `Изменение bruto работодателя: ≈ ${euros(forecast.gross - before.gross)}`} · ${draft.status === "planned" ? "План" : "Внесённая работа"}`;
     else {
       const line = forecast.lines.find((l) => l.id === draft.id);
       el.textContent = `${draft.kind === "vacation" ? eventDates(draft).filter((d) => !holiday(d)).length + " дн. отпуска" : eventDates(draft).length + " календарных дн."} · ${line ? `Пособие/отпускные в месяце: ≈ ${euros(line.employer + (line.insurer || 0))}` : "Оплачиваемый отдых"}${forecast.unknown ? " · Есть неизвестные части" : ""}`;
@@ -285,7 +285,7 @@ export function openEventEditor(
       draft.startTime && draft.endTime ? eventBounds(draft) : undefined;
     const match = bounds
       ? plan.original.find(
-          (i) => i.start === bounds.start && i.end === bounds.end,
+          (i) => i.start === bounds.start && i.end === bounds.end && i.kind === (draft.kind === "home" ? "home" : "hours"),
         )
       : undefined;
     if (match) draft.linkedKey = match.key;
@@ -312,7 +312,7 @@ export function openEventEditor(
           ));
     openDialog(
       `<div class="dialog-panel"><div class="dialog-head"><h2>${existing ? "Изменить запись" : "Добавить запись"}</h2><button type="button" id="event-close" aria-label="Закрыть">×</button></div><form id="event-form" class="dialog-content personal-form">
-    ${existing ? `<b>${esc(eventLabels[draft.kind])}</b>` : showTypes ? `<div class="event-type-choices">${(["note", "emergency", "extra", "sick", "vacation"] as const).map((k) => `<button type="button" data-event-kind="${k}" aria-pressed="${draft.kind === k}">${eventLabels[k]}</button>`).join("")}</div>` : `<button type="button" id="change-event-type" class="type-current">${eventLabels[draft.kind]} · изменить</button>`}
+    ${existing ? `<b>${esc(eventLabels[draft.kind])}</b>` : showTypes ? `<div class="event-type-choices">${(["note", "emergency", "extra", "home", "sick", "vacation"] as const).map((k) => `<button type="button" data-event-kind="${k}" aria-pressed="${draft.kind === k}">${eventLabels[k]}</button>`).join("")}</div>` : `<button type="button" id="change-event-type" class="type-current">${eventLabels[draft.kind]} · изменить</button>`}
     ${draft.kind === "sick" || draft.kind === "care" ? `<div class="choice-pair"><button type="button" data-absence-kind="sick" aria-pressed="${draft.kind === "sick"}">Болею сам</button><button type="button" data-absence-kind="care" aria-pressed="${draft.kind === "care"}">Ухаживаю за ребёнком</button></div>` : ""}
     ${c.config.owner ? `<input type="hidden" name="owner" value="${esc(draft.owner || c.config.owner)}"><small>Мой календарь · ${esc(c.config.owner)}</small>` : field("Личный D-номер", "owner", draft.owner, "text", 'placeholder="Например, D12" pattern="D[0-9]+" ' + (draft.kind === "note" ? "" : "required"))}
     ${
@@ -366,7 +366,7 @@ export function openEventEditor(
         : ""
     }
     ${
-      work
+      work && draft.kind !== "home"
         ? `<div class="field-hint">${helpButton("type")} Категория определяется оформлением работодателя.</div>${
             draft.kind === "emergency"
               ? select("Компенсация", "compensation", draft.compensation, [
@@ -382,9 +382,10 @@ export function openEventEditor(
           }`
         : ""
     }
+    ${draft.kind === "home" ? `<p class="field-hint">Домашнее дежурство (koduvalve): оплата по ставке ${c.settings.homeDutyPercent}% в параметрах зарплаты. Учитывается отдельно от рабочих часов.</p>` : ""}
     ${draft.kind === "emergency" ? `<details><summary>Уточнить уже оплаченную часть</summary><label class="check-line"><input type="checkbox" name="baseAlreadyPaid"${draft.baseAlreadyPaid ? " checked" : ""}> Базовая оплата этих часов ×1 уже начислена отдельно</label><small>Тогда добавляем только оставшиеся ×0,5. Связь с PDF сама по себе не подтверждает оплату.</small></details>` : ""}
     ${match ? `<label class="check-line"><input name="linkConfirmed" type="checkbox"${draft.linkConfirmed ? " checked" : ""}> Это та же смена из PDF — считать время один раз</label><input type="hidden" name="linkedKey" value="${esc(match.key)}">` : ""}
-    ${work ? `<button type="button" class="text-button" id="after-shift">Начать после смены этого дня</button>` : ""}
+    ${work && plan.work.some(i => i.kind === "hours" && wall(i.start).slice(0, 10) === draft.start) ? `<button type="button" class="text-button" id="after-shift">Начать после смены этого дня</button>` : ""}
     ${
       absence
         ? `<details><summary>Расчёт и выплата ${helpButton("rates")}</summary>
@@ -529,16 +530,17 @@ export function openEventEditor(
     );
     document.querySelector("#after-shift")?.addEventListener("click", () => {
       read();
-      const i = plan.original
+      const i = plan.work
         .filter(
           (i) =>
             wall(i.start).slice(0, 10) === draft.start && i.kind === "hours",
         )
         .at(-1);
       if (i) {
+        const duration = Math.max(1, eventBounds(draft).end - eventBounds(draft).start);
         draft.start = wall(i.end).slice(0, 10);
         draft.startTime = wall(i.end).slice(11, 16);
-        const end = wall(i.end + 240);
+        const end = wall(i.end + duration);
         draft.end = end.slice(0, 10);
         draft.endTime = end.slice(11, 16);
         dirty = true;

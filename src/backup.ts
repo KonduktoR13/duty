@@ -19,7 +19,7 @@ const mark = z.discriminatedUnion("kind", [
   z.object({ date: day, kind: z.literal("home"), raw: text, hours }),
   z.object({ date: day, kind: z.literal("tentative"), raw: text, hours }),
   z.object({ date: day, kind: z.literal("other"), raw: text }),
-  z.object({ date: day, kind: z.literal("leave"), raw: z.enum(["P", "LHPu"]) }),
+  z.object({ date: day, kind: z.literal("leave"), raw: z.enum(["P", "P-et", "LHPu"]) }),
 ]);
 const shift = z.object({ date: day, hours, code: text });
 const candidate = z.object({
@@ -28,7 +28,7 @@ const candidate = z.object({
   marks: z.array(mark),
   shifts: z.array(shift),
   leaveDates: z.array(day),
-  leaveCodes: z.record(day, z.enum(["P", "LHPu"])),
+  leaveCodes: z.record(day, z.enum(["P", "P-et", "LHPu"])),
   confidence: z.enum(["high", "review"]),
 });
 const month = z.object({
@@ -41,7 +41,7 @@ const month = z.object({
   candidates: z.array(candidate).optional(),
   rosterComplete: z.boolean().optional(),
   leaveDates: z.array(day).optional(),
-  leaveCodes: z.record(day, z.enum(["P", "LHPu"])).optional(),
+  leaveCodes: z.record(day, z.enum(["P", "P-et", "LHPu"])).optional(),
   deltaNumber: delta,
   status: z.enum(["local", "changed"]),
   calendar: z

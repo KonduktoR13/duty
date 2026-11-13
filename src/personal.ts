@@ -23,6 +23,7 @@ export const eventLabels: Record<PersonalEvent["kind"], string> = {
   note: "Своя запись",
   emergency: "Erakorraline",
   extra: "Дополнительный выход",
+  home: "Koduvalve · дома",
   sick: "Больничный",
   care: "Уход за ребёнком",
   vacation: "Отпуск",
@@ -55,7 +56,7 @@ export function eventEnd(e: PersonalEvent, today = todayTallinn()) {
   return e.end || (today < e.start ? e.start : today);
 }
 export const isWork = (e: PersonalEvent) =>
-  e.kind === "extra" || e.kind === "emergency";
+  e.kind === "extra" || e.kind === "emergency" || e.kind === "home";
 export const isAbsence = (e: PersonalEvent) =>
   ["sick", "care", "vacation", "timeoff"].includes(e.kind);
 export function eventDates(e: PersonalEvent, today = todayTallinn()) {
@@ -79,7 +80,7 @@ export type PersonalInterval = {
   end: number;
   kind: "hours" | "home";
   raw: string;
-  source: "pdf" | "extra" | "emergency";
+  source: "pdf" | "extra" | "emergency" | "home";
   eventId?: string;
   incomplete?: boolean;
 };
@@ -177,7 +178,7 @@ export function personalPlan(
     if (
       e.linkConfirmed &&
       !original.some(
-        (i) => i.key === e.linkedKey && i.start === b.start && i.end === b.end,
+        (i) => i.key === e.linkedKey && i.kind === (e.kind === "home" ? "home" : "hours") && i.start === b.start && i.end === b.end,
       )
     )
       conflicts.push(e.id);
@@ -186,6 +187,7 @@ export function personalPlan(
       overlaps[0].source === "pdf" &&
       overlaps[0].key === e.linkedKey &&
       e.linkConfirmed &&
+      overlaps[0].kind === (e.kind === "home" ? "home" : "hours") &&
       b.start === overlaps[0].start &&
       b.end === overlaps[0].end;
     if (overlaps.length && !linked) {
@@ -196,9 +198,9 @@ export function personalPlan(
     work.push({
       ...b,
       key: linked ? overlaps[0].key : "manual:" + e.id,
-      raw: e.kind === "emergency" ? "Erakorraline" : "+",
-      kind: "hours",
-      source: e.kind as "extra" | "emergency",
+      raw: e.kind === "home" ? `V${(b.end - b.start) / 60}` : e.kind === "emergency" ? "Erakorraline" : "+",
+      kind: e.kind === "home" ? "home" : "hours",
+      source: e.kind as "extra" | "emergency" | "home",
       eventId: e.id,
     });
   }
@@ -337,7 +339,7 @@ export function absenceReduction(
   const pdfP = new Set(
     allMarksForDelta(c.months, c.config.owner)
       .filter(
-        (m) => m.date.startsWith(month) && m.kind === "leave" && m.raw === "P",
+        (m) => m.date.startsWith(month) && m.kind === "leave" && (m.raw === "P" || m.raw === "P-et"),
       )
       .map((m) => m.date),
   );
@@ -429,7 +431,7 @@ function earnedMonth(c: PayrollContext, month: string) {
         (e) => isAbsence(e) && eventTouches(e, d, c.today),
       );
       const p = allMarksForDelta(c.months, c.config.owner).some(
-        (m) => m.date === d && m.kind === "leave" && m.raw === "P",
+        (m) => m.date === d && m.kind === "leave" && (m.raw === "P" || m.raw === "P-et"),
       );
       const missed =
         absence?.kind === "timeoff"
@@ -965,18 +967,25 @@ export function personalForecast(
     });
   }
   for (const e of es.filter(isWork)) {
-    const hours = intervalStats(
-      earned.plan.work.filter((i) => i.eventId === e.id),
-      month,
-    ).work;
+    const stats = intervalStats(
+      earned.plan.work.filter((i) => i.eventId === e.id), month,
+    );
+    const hours = e.kind === "home" ? stats.home : stats.work;
     if (!hours) continue;
     const ambiguous = clockChange(e);
+    // Use the same dated rate and cent rounding as earnedMonth, including salary changes.
+    const homePay = e.kind === "home" ? roundMoney(monthDays(month).reduce((sum, d) => {
+      const settings = applicableSalary(c.settings, c.config, d);
+      const rate = settings.baseSalary / earned.legacy.normHours;
+      const hours = earned.plan.work.filter(i => i.eventId === e.id).reduce((total, i) => total + intersect(i, { start: minute(d), end: minute(shiftDay(d, 1)) }) / 60, 0);
+      return sum + roundMoney(rate * settings.homeDutyPercent / 100) * hours;
+    }, 0)) : 0;
     if (ambiguous) unknown = true;
     lines.push({
       id: e.id,
       label: eventLabels[e.kind],
       employer:
-        e.kind === "emergency" && e.compensation === "money"
+        e.kind === "home" ? homePay : e.kind === "emergency" && e.compensation === "money"
           ? roundMoney(
               hours *
                 earned.legacy.hourlyRate *
@@ -986,7 +995,9 @@ export function personalForecast(
       days: 0,
       notes: [
         `${hours} ч по местному времени; ${e.status === "planned" ? "запланирован" : "внесён как отработанный"}.`,
-        e.kind === "extra"
+        e.kind === "home"
+          ? `Домашнее дежурство: ставка часа × ${earned.settings.homeDutyPercent}%. В рабочие и сверхурочные часы не входит; ночные и праздничные надбавки не начисляются.`
+          : e.kind === "extra"
           ? "Итоговая компенсация определяется по всему учётному периоду."
           : e.compensation === "rest"
             ? "Выбрана компенсация отдыхом; денежные ×1,5 не начисляются."
@@ -1002,7 +1013,7 @@ export function personalForecast(
       paymentDate: e.paymentDate,
     });
   }
-  // Imported vacation is already in the legacy source. Only unmatched P dates use the saved rate.
+  // Imported P and P-et use the saved rate unless covered by a manual absence.
   const coveredVacation = new Set(
     es
       .filter((e) => e.kind === "vacation")
@@ -1012,7 +1023,7 @@ export function personalForecast(
     (m) =>
       m.date.startsWith(month) &&
       m.kind === "leave" &&
-      m.raw === "P" &&
+      (m.raw === "P" || m.raw === "P-et") &&
       !holiday(m.date) &&
       !handled.has(m.date) &&
       !coveredVacation.has(m.date),

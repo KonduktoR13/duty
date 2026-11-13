@@ -18,6 +18,7 @@ export const eventSchema = z
       "note",
       "emergency",
       "extra",
+      "home",
       "sick",
       "care",
       "vacation",
@@ -78,7 +79,7 @@ export const eventSchema = z
       fail("Окончание должно быть позже начала");
     if (e.caseStart && e.caseStart > e.start)
       fail("Исходный случай начинается позже вашего листа");
-    const work = e.kind === "extra" || e.kind === "emergency";
+    const work = e.kind === "extra" || e.kind === "emergency" || e.kind === "home";
     if (
       work &&
       (!e.startTime ||

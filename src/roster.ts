@@ -9,6 +9,7 @@ export const isScheduledMark = (mark: DayMark) => isWorkMark(mark) || mark.kind 
 
 export function migrateMark(mark: DayMark): DayMark {
   if (mark.kind !== 'other') return mark
+  if (/^P-et$/i.test(mark.raw)) return { date: mark.date, kind: 'leave', raw: 'P-et' }
   const tentative = mark.raw.match(/^#(\d+)$/)
   const hours = Number(tentative?.[1])
   return tentative && hours > 0 && hours <= 48
@@ -46,7 +47,11 @@ export function legacyCandidate(month: MonthRecord): Candidate | undefined {
 }
 
 export function candidatesForMonth(month: MonthRecord): Candidate[] {
-  if (month.candidates?.length) return month.candidates.map(candidate => ({ ...candidate, marks: candidate.marks.map(migrateMark) }))
+  if (month.candidates?.length) return month.candidates.map(candidate => {
+    const marks = candidate.marks.map(migrateMark)
+    const leave = marks.filter((mark): mark is Extract<DayMark, { kind: 'leave' }> => mark.kind === 'leave')
+    return { ...candidate, marks, confidence: marks.length && !marks.some(mark => mark.kind === 'other') ? 'high' : 'review', leaveDates: leave.map(mark => mark.date), leaveCodes: Object.fromEntries(leave.map(mark => [mark.date, mark.raw])) }
+  })
   const fallback = legacyCandidate(month)
   return fallback ? [fallback] : []
 }

@@ -47,7 +47,7 @@ export function createCalendarView(state: CalendarViewState) {
   }
 
   function markDescription(mark: DayMark, compact = false) {
-    if (mark.kind === 'leave') return mark.raw === 'LHPu' ? 'Отпуск по уходу за ребёнком' : 'Отпуск'
+    if (mark.kind === 'leave') return mark.raw === 'LHPu' ? 'Отпуск по уходу за ребёнком' : mark.raw === 'P-et' ? 'Дополнительный отпуск · eriteenistuja lisapuhkus' : 'Отпуск'
     if (mark.kind === 'tentative')
       return compact
         ? `${mark.raw} · возможный выход`
@@ -380,7 +380,7 @@ export function createCalendarView(state: CalendarViewState) {
       legendExpanded +
       '" aria-controls="calendar-legend"><span>Легенда</span><small>7 обозначений</small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' +
       (legendExpanded ? ' expanded' : '') +
-      '" id="calendar-legend"><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></div></div></section></section>' +
+      '" id="calendar-legend"><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P / P-et · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></div></div></section></section>' +
       calendarSyncCard(month) +
       selectedDetails(marksByDate, month, foreignByDate)
     )

@@ -1,5 +1,5 @@
 export type Shift = { date: string; hours: number; code: string }
-export type LeaveCode = 'P' | 'LHPu'
+export type LeaveCode = 'P' | 'P-et' | 'LHPu'
 export type DayMark =
   | { date: string; kind: 'hours' | 'home'; raw: string; hours: number }
   | { date: string; kind: 'tentative'; raw: string; hours: number }

@@ -48,7 +48,6 @@ import {
   candidatesForMonth,
   isWorkMark,
   knownDeltaNumbers,
-  migrateMark,
   type ForeignDayEntry,
 } from "./roster";
 import {
@@ -382,10 +381,7 @@ async function refresh() {
   legacyNeedsReimport = [];
   for (const month of months) {
     if (month.candidates?.length) {
-      const candidates = month.candidates.map((candidate) => ({
-        ...candidate,
-        marks: candidate.marks.map(migrateMark),
-      }));
+      const candidates = candidatesForMonth(month);
       const changed = month.candidates.some((candidate, candidateIndex) =>
         candidate.marks.some(
           (mark, markIndex) =>
@@ -393,7 +389,10 @@ async function refresh() {
         ),
       );
       if (changed) {
-        await storage.put({ ...month, candidates });
+        const selectedCandidate = candidates.find(c => c.number === month.deltaNumber);
+        await storage.put({ ...month, candidates, ...(selectedCandidate ? {
+          marks: selectedCandidate.marks, leaveDates: selectedCandidate.leaveDates, leaveCodes: selectedCandidate.leaveCodes,
+        } : {}) });
         upgraded = true;
       }
       continue;

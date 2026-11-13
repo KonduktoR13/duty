@@ -21,7 +21,7 @@ import { helpButton, euros, hoursLabel, bindHelp } from "./personal-editor";
 import type { PersonalEvent } from "./personal-types";
 
 export function eventRow(e: PersonalEvent) {
-  return `<button class="personal-event-row color-${e.color}" data-edit-event="${esc(e.id)}"><span class="event-symbol" aria-hidden="true">${e.kind === "note" ? "●" : e.kind === "vacation" ? "☼" : isWork(e) ? "+" : "◇"}</span><span><b>${esc(e.title || eventLabels[e.kind])}</b><small>${e.startTime ? `${e.startTime}–${e.endTime} · ` : ""}${e.end && e.end !== e.start ? `${e.start} — ${e.end}` : !e.end && isAbsence(e) ? `${e.start} — продолжается` : e.start}${e.hours ? " · " + hoursLabel(e.hours) : ""}${e.status === "planned" && e.kind !== "note" ? " · План" : ""}</small>${e.note ? `<small>${esc(e.note)}</small>` : ""}</span><i aria-hidden="true">›</i></button>`;
+  return `<button class="personal-event-row color-${e.color}" data-edit-event="${esc(e.id)}" aria-label="${esc(`Изменить: ${e.title || eventLabels[e.kind]}`)}"><span class="event-symbol" aria-hidden="true">${e.kind === "note" ? "●" : e.kind === "home" ? "V" : e.kind === "vacation" ? "☼" : isWork(e) ? "+" : "◇"}</span><span><b>${esc(e.title || eventLabels[e.kind])}</b><small>${e.startTime ? `${e.startTime}–${e.endTime} · ` : ""}${e.end && e.end !== e.start ? `${e.start} — ${e.end}` : !e.end && isAbsence(e) ? `${e.start} — продолжается` : e.start}${e.hours ? " · " + hoursLabel(e.hours) : ""}${e.status === "planned" && e.kind !== "note" ? " · План" : ""}</small>${e.note ? `<small>${esc(e.note)}</small>` : ""}</span><i aria-hidden="true">✎</i></button>`;
 }
 export function activeAbsence(c: PayrollContext) {
   return c.events.find(
@@ -78,7 +78,7 @@ export function decoratePersonalCalendar(
         .slice(0, 2)
         .map(
           (e) =>
-            `<i class="color-${e.color}">${e.kind === "note" ? "●" : isWork(e) ? "+" : e.kind === "vacation" ? "☼" : "◇"}</i>`,
+            `<i class="color-${e.color}">${e.kind === "note" ? "●" : e.kind === "home" ? "V" : isWork(e) ? "+" : e.kind === "vacation" ? "☼" : "◇"}</i>`,
         )
         .join("") + (events.length > 2 ? `<i>+${events.length - 2}</i>` : "");
     cell.append(marker);
@@ -149,7 +149,7 @@ export function personalSummary(
   f = personalForecast(c, month),
 ) {
   const source = intervalStats(f.plan.original, month);
-  return `<section class="personal-summary"><h2>Ваши изменения</h2><p class="field-hint">По личному плану и внесённой работе ${helpButton("quality")}</p><div class="pay-row"><span>По исходному графику</span><b>${hoursLabel(source.work)}</b></div><div class="pay-row"><span>Пропущено по отсутствиям</span><b>−${hoursLabel(intervalStats(f.plan.blocked, month).work)}</b></div><div class="pay-row"><span>Дополнительные выходы</span><b>${hoursLabel(f.stat.extra)}</b></div><div class="pay-row"><span>Erakorraline</span><b>${hoursLabel(f.stat.emergency)}</b></div><div class="pay-row total"><span>По плану с изменениями</span><b>${hoursLabel(f.stat.work)}</b></div><details><summary>Свои часы: ${hoursLabel(f.ownHours)}</summary>${
+  return `<section class="personal-summary"><h2>Ваши изменения</h2><p class="field-hint">По личному плану и внесённой работе ${helpButton("quality")}</p><div class="pay-row"><span>По исходному графику</span><b>${hoursLabel(source.work)}</b></div><div class="pay-row"><span>Пропущено по отсутствиям</span><b>−${hoursLabel(intervalStats(f.plan.blocked, month).work)}</b></div><div class="pay-row"><span>Дополнительные выходы</span><b>${hoursLabel(f.stat.extra)}</b></div>${f.stat.home ? `<div class="pay-row"><span>Koduvalve · отдельно от работы</span><b>${hoursLabel(f.stat.home)}</b></div>` : ""}<div class="pay-row"><span>Erakorraline</span><b>${hoursLabel(f.stat.emergency)}</b></div><div class="pay-row total"><span>По плану с изменениями</span><b>${hoursLabel(f.stat.work)}</b></div><details><summary>Свои часы: ${hoursLabel(f.ownHours)}</summary>${
     c.events
       .filter((e) => e.kind === "note" && e.start.startsWith(month))
       .map(eventRow)

@@ -103,3 +103,12 @@ it("reads v2 personal data, rejects impossible dates, and never silently strips 
     readBackup(file({ ...v2, events: [event, event] })),
   ).rejects.toThrow("повторяются");
 });
+
+
+it("restores supplementary leave and manual koduvalve without dropping their types", async () => {
+  const m = { id: "2026-12", fileName: "demo.pdf", importedAt: 1, hash: "x", shifts: [], deltaNumber: "D12", status: "local", marks: [{ date: "2026-12-31", kind: "leave", raw: "P-et" }], leaveDates: ["2026-12-31"], leaveCodes: { "2026-12-31": "P-et" } };
+  const e = { id: "home-1", kind: "home", owner: "D12", start: "2026-12-15", end: "2026-12-15", startTime: "06:00", endTime: "08:00", title: "Koduvalve", createdAt: 1, updatedAt: 1 };
+  const result = await readBackup(new Blob([JSON.stringify({ ...base, version: 2, months: [m], events: [e], payroll: [] })]));
+  expect(result.months[0].leaveCodes?.["2026-12-31"]).toBe("P-et");
+  expect(result.events?.[0]).toMatchObject(e);
+});

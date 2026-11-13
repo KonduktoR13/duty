@@ -78,7 +78,7 @@
   color: white;
   border-color: var(--accent);
 }
-.event-type-choices button:last-child {
+.event-type-choices button:last-child:nth-child(odd) {
   grid-column: 1/-1;
 }
 .choice-pair,
@@ -96,6 +96,8 @@
   gap: 12px;
 }
 .duration-buttons > button {
+  white-space: nowrap;
+  font-size: 14px;
   flex: 1;
   min-width: 0;
   padding: 8px;

@@ -128,3 +128,76 @@ test("long press opens the tapped date and explicit vacation interruption preser
     "2026-09-13",
   ]);
 });
+
+
+test("manual koduvalve follows a 22-hour shift, supports arbitrary time, editing and deletion at 320px", async ({ page }) => {
+  await page.setViewportSize({ width: 320, height: 780 });
+  await page.goto("/");
+  await page.locator("#file").setInputFiles(rosterPdf("22"));
+  await page.locator('[data-delta="D12"]').click();
+  await page.locator("#confirm-import").click();
+  await page.locator('[data-day="2026-09-07"]').click();
+  await page.locator("#add-day-personal").click();
+  await page.locator('[data-event-kind="home"]').click();
+  await page.locator('[name="endTime"]').fill("10:30");
+  await page.locator("#after-shift").click();
+  await expect(page.locator('[name="start"]')).toHaveValue("2026-09-08");
+  await expect(page.locator('[name="startTime"]')).toHaveValue("06:00");
+  await expect(page.locator('[name="endTime"]')).toHaveValue("08:30");
+  await expect(page.locator('[data-help="type"]')).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await page.locator("#save-event").click();
+  await expect(page.locator("#dialog")).not.toBeVisible();
+  await page.locator('.personal-day-content [data-edit-event]').click();
+  await expect(page.locator('#dialog h2')).toHaveText("Изменить запись");
+  await page.locator('[name="endTime"]').fill("09:15");
+  await page.locator("#save-event").click();
+  await page.reload();
+  await page.locator("#list-mode").click();
+  await expect(page.locator('.personal-event-row')).toContainText("06:00–09:15");
+  await page.locator('[data-section="analysis"]').click();
+  await expect(page.locator('.personal-summary')).toContainText("3,25 ч");
+  await page.locator("[data-forecast-details]").click();
+  await expect(page.locator("#dialog")).toContainText("Koduvalve");
+  await page.locator("#forecast-close").click();
+  await page.locator('[data-section="calendar"]').click();
+  await page.locator("#list-mode").click();
+  await page.locator('.personal-event-row').click();
+  page.once("dialog", d => d.accept());
+  await page.locator('#delete-event').click();
+  await expect(page.locator("#dialog")).not.toBeVisible();
+  await expect(page.locator('.personal-event-row')).toHaveCount(0);
+});
+
+test("stored P-et becomes vacation on startup and stays recognized after reload", async ({ page }) => {
+  await page.goto("/");
+  await roster(page);
+  await page.evaluate(async () => {
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const r = indexedDB.open("my-shifts");
+      r.onsuccess = () => resolve(r.result);
+      r.onerror = () => reject(r.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const tx = db.transaction("months", "readwrite");
+      const store = tx.objectStore("months");
+      const r = store.get("2026-09");
+      r.onsuccess = () => {
+        const m = r.result;
+        const mark = { date: "2026-09-15", kind: "other", raw: "P-et" };
+        m.marks.push(mark);
+        m.candidates.find((c: { number: string }) => c.number === "D12").marks.push(mark);
+        store.put(m);
+      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    db.close();
+  });
+  for (let i = 0; i < 2; i++) {
+    await page.reload();
+    await page.locator('[data-day="2026-09-15"]').click();
+    await expect(page.locator('#shift-details')).toContainText("eriteenistuja lisapuhkus");
+    await expect(page.locator('[data-day="2026-09-15"]')).toHaveClass(/leave-vacation/);
+  }
+});

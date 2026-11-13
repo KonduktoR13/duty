@@ -286,7 +286,7 @@ export function analyzeMonth(
         (mark) =>
           mark.date.startsWith(month + "-") &&
           mark.kind === "leave" &&
-          mark.raw === "P" &&
+          (mark.raw === "P" || mark.raw === "P-et") &&
           !isEstonianPublicHoliday(mark.date),
       )
       .map((mark) => mark.date),
