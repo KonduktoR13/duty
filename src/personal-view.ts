@@ -63,8 +63,6 @@ export function decoratePersonalCalendar(
     welcome.querySelector("#import")?.after(b);
   }
   if (!own) return;
-  if (!c.months.some((m) => m.id === month) && !c.config.syncPersonal)
-    document.querySelector(".sync-card")?.remove();
   const es = c.events.filter((e) => belongs(e, c.config.owner));
   for (const cell of document.querySelectorAll<HTMLElement>("[data-day]")) {
     const date = cell.dataset.day!,
@@ -84,6 +82,9 @@ export function decoratePersonalCalendar(
     cell.append(marker);
     cell.classList.add("has-personal");
     if (events.some(isAbsence)) cell.classList.add("has-absence");
+    if (cell.classList.contains("other-code") && events.every((e) => !isWork(e) && e.kind !== "vacation")) {
+      cell.classList.add("personal-day-color", `color-${events[0].color}`);
+    }
     cell.setAttribute(
       "aria-label",
       (cell.getAttribute("aria-label") || date) +
@@ -129,6 +130,10 @@ export function decoratePersonalCalendar(
   }
   const content = document.querySelector("#shift-details .detail-content");
   if (content && selectedDate) {
+    if (es.some((e) => eventTouches(e, selectedDate))) {
+      content.querySelector(".empty-detail")?.remove();
+      if (content.querySelector(":scope > b")?.textContent === "Нет смен") content.querySelector(":scope > b")?.remove();
+    }
     const div = document.createElement("div");
     div.className = "personal-day-content";
     div.innerHTML =

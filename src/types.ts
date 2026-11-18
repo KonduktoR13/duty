@@ -6,6 +6,9 @@ export type DayMark =
   | { date: string; kind: 'leave'; raw: LeaveCode }
   | { date: string; kind: 'other'; raw: string }
 
+// Calendar-only presentation keeps exact manual times out of PDF parsing rules.
+export type CalendarMark = DayMark & { description?: string; eventId?: string }
+
 export type CalendarEventDraft = {
   key: string
   date: string

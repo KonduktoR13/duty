@@ -8,7 +8,7 @@ import {
 } from './roster'
 import { buildCalendarDrafts } from './calendar-sync'
 import { esc } from './ui'
-import type { DayMark, MonthRecord } from './types'
+import type { CalendarMark, MonthRecord } from './types'
 
 type CalendarViewState = {
   months: MonthRecord[]
@@ -17,8 +17,8 @@ type CalendarViewState = {
   legendExpanded: boolean
   showColleagues: boolean
   calendarMode: 'grid' | 'list'
-  allMarks: () => DayMark[]
-  groupMarks: (marks: DayMark[]) => Map<string, DayMark[]>
+  allMarks: () => CalendarMark[]
+  groupMarks: (marks: CalendarMark[]) => Map<string, CalendarMark[]>
   todayId: () => string
   date: (value: string) => string
   calendarSyncCard: (month: MonthRecord) => string
@@ -37,16 +37,17 @@ export function createCalendarView(state: CalendarViewState) {
     date,
     calendarSyncCard,
   } = state
-  const displayCode = (mark: Pick<WorkMark, 'raw'> | DayMark) =>
+  const displayCode = (mark: Pick<WorkMark, 'raw'> | CalendarMark) =>
     mark.raw === '16+8' ? '24' : mark.raw
   const hoursText = (hours: number) => `${String(hours).replace('.', ',')} ч`
-  function isMonthBoundaryPart(mark: DayMark) {
+  function isMonthBoundaryPart(mark: CalendarMark) {
     if (mark.kind !== 'hours' || mark.hours !== 16 || !/^16$/i.test(mark.raw)) return false
     const value = new Date(mark.date + 'T12:00:00')
     return value.getDate() === new Date(value.getFullYear(), value.getMonth() + 1, 0).getDate()
   }
 
-  function markDescription(mark: DayMark, compact = false) {
+  function markDescription(mark: CalendarMark, compact = false) {
+    if (mark.description) return mark.description
     if (mark.kind === 'leave') return mark.raw === 'LHPu' ? 'Отпуск по уходу за ребёнком' : mark.raw === 'P-et' ? 'Дополнительный отпуск · eriteenistuja lisapuhkus' : 'Отпуск'
     if (mark.kind === 'tentative')
       return compact
@@ -73,7 +74,7 @@ export function createCalendarView(state: CalendarViewState) {
       : `${hoursText(mark.hours)} · ${timeLabel({ date: mark.date, hours: mark.hours, code: mark.raw })} · код ${mark.raw}`
   }
 
-  function foreignMarkDescription(mark: DayMark, marks: DayMark[], deltaNumber: string) {
+  function foreignMarkDescription(mark: CalendarMark, marks: CalendarMark[], deltaNumber: string) {
     if (!isWorkMark(mark)) return markDescription(mark)
     const draft = buildCalendarDrafts(mark.date.slice(0, 7), deltaNumber, marks).find(
       (item) => item.raw === mark.raw && item.kind === mark.kind,
@@ -140,7 +141,7 @@ export function createCalendarView(state: CalendarViewState) {
     )
   }
 
-  function dayTone(marks: DayMark[]) {
+  function dayTone(marks: CalendarMark[]) {
     const has24 = marks.some((mark) => mark.kind === 'hours' && mark.hours === 24)
     const hasBoundary = marks.some(isMonthBoundaryPart)
     const hasDay = marks.some(
@@ -150,7 +151,7 @@ export function createCalendarView(state: CalendarViewState) {
     const hasHome = marks.some((mark) => mark.kind === 'home')
     const hasOther = marks.some((mark) => mark.kind === 'other')
     const leave = marks.find(
-      (mark): mark is Extract<DayMark, { kind: 'leave' }> => mark.kind === 'leave',
+      (mark): mark is Extract<CalendarMark, { kind: 'leave' }> => mark.kind === 'leave',
     )
     if (has24 && hasHome) return 'mixed-duty-home'
     if (hasDay && hasHome) return 'mixed-day-home'
@@ -167,13 +168,13 @@ export function createCalendarView(state: CalendarViewState) {
     return hasOther ? 'other-code' : ''
   }
 
-  function dayAria(dateKey: string, marks: DayMark[]) {
+  function dayAria(dateKey: string, marks: CalendarMark[]) {
     return `${date(dateKey)}: ${marks.map((mark) => markDescription(mark)).join('; ')}`
   }
 
   function calendarPage(
     month: MonthRecord,
-    marksByDate: Map<string, DayMark[]>,
+    marksByDate: Map<string, CalendarMark[]>,
     suppliedForeign?: Map<string, ForeignDayEntry[]>,
   ) {
     const currentDay = todayId()
@@ -261,7 +262,7 @@ export function createCalendarView(state: CalendarViewState) {
   }
 
   function selectedDetails(
-    marksByDate: Map<string, DayMark[]>,
+    marksByDate: Map<string, CalendarMark[]>,
     month: MonthRecord,
     foreignByDate: Map<string, ForeignDayEntry[]>,
   ) {
@@ -346,6 +347,8 @@ export function createCalendarView(state: CalendarViewState) {
     if (calendarMode === 'list') {
       const rows = [...marksByDate]
         .filter(([day]) => day.startsWith(month.id + '-'))
+        .map(([day, marks]) => [day, marks.filter((mark) => !mark.eventId)] as const)
+        .filter(([, marks]) => marks.length)
         .sort(([a], [b]) => a.localeCompare(b))
         .map(
           ([day, marks]) =>

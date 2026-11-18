@@ -485,3 +485,9 @@
   color: var(--accent);
 }
 #event-form .choice-pair button[aria-pressed=true],#event-form .event-type-choices button[aria-pressed=true]{background:#582c76;color:#fff}
+
+.day.personal-day-color {
+  color: var(--text);
+  background: color-mix(in srgb, var(--marker) 16%, var(--surface));
+  border-color: color-mix(in srgb, var(--marker) 48%, var(--line));
+}

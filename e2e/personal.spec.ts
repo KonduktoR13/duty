@@ -17,11 +17,13 @@ test("personal note works without PDF, survives offline reload and keeps form st
   await page.locator('[name="title"]').fill("Обучение K-команды");
   await page.locator('[name="noteMode"]').selectOption("hours");
   await page.locator('[name="hours"]').fill("4,5");
+  const noteDate = await page.locator('[name="start"]').inputValue();
   await page.locator("#save-event").click();
   await expect(page.locator("#dialog")).not.toBeVisible();
   await expect(page.locator(".personal-event-row")).toContainText(
     "Обучение K-команды",
   );
+  await expect(page.locator(`[data-day="${noteDate}"]`)).toHaveClass(/personal-day-color/);
   await page.locator('[data-section="analysis"]').click();
   await expect(page.locator(".personal-summary")).toContainText("4,5 ч");
   await page.locator('[data-section="calendar"]').click();
@@ -148,14 +150,26 @@ test("manual koduvalve follows a 22-hour shift, supports arbitrary time, editing
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   await page.locator("#save-event").click();
   await expect(page.locator("#dialog")).not.toBeVisible();
+  const homeDay = page.locator('[data-day="2026-09-08"]');
+  await expect(homeDay).toHaveClass(/home-duty/);
+  await expect(homeDay).not.toHaveClass(/day-empty/);
+  await expect(homeDay).toContainText('V2.5');
+  await expect(homeDay).toHaveAttribute('aria-label', /06:00–08:30/);
+  await expect(page.locator('.sync-copy small')).toContainText('подтверждённых событий');
   await page.locator('.personal-day-content [data-edit-event]').click();
   await expect(page.locator('#dialog h2')).toHaveText("Изменить запись");
   await page.locator('[name="endTime"]').fill("09:15");
   await page.locator("#save-event").click();
   await expect(page.locator("#dialog")).not.toBeVisible();
   await expect(page.locator(".personal-day-content [data-edit-event]")).toContainText("06:00–09:15");
+  await expect(homeDay).toHaveAttribute('aria-label', /06:00–09:15/);
+  await page.locator('#next').click();
+  await expect(page.locator('#picker')).toContainText('октябрь');
+  await page.locator('#prev').click();
+  await expect(homeDay).toHaveClass(/home-duty/);
   await page.reload();
   await page.locator("#list-mode").click();
+  await expect(page.locator('.personal-event-row')).toHaveCount(1);
   await expect(page.locator('.personal-event-row')).toContainText("06:00–09:15");
   await page.locator('[data-section="analysis"]').click();
   await expect(page.locator('.personal-summary')).toContainText("3,25 ч");
@@ -202,4 +216,34 @@ test("stored P-et becomes vacation on startup and stays recognized after reload"
     await expect(page.locator('#shift-details')).toContainText("eriteenistuja lisapuhkus");
     await expect(page.locator('[data-day="2026-09-15"]')).toHaveClass(/leave-vacation/);
   }
+});
+
+test("manual home duty without PDF colors the day and offers ordinary Google sync", async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#add-personal').click();
+  await page.locator('[data-event-kind="home"]').click();
+  await page.locator('[name="owner"]').fill('D12');
+  await page.locator('[name="start"]').fill('2026-11-19');
+  await page.locator('[name="end"]').fill('2026-11-19');
+  await page.locator('[name="startTime"]').fill('09:15');
+  await page.locator('[name="endTime"]').fill('12:30');
+  await page.locator('#save-event').click();
+  await expect(page.locator('#dialog')).not.toBeVisible();
+  const day = page.locator('[data-day="2026-11-19"]');
+  await expect(day).toHaveClass(/home-duty/);
+  await expect(page.locator('#sync-month')).toBeEnabled();
+  await expect(page.locator('.sync-copy small')).toContainText('1 подтверждённых событий');
+  await page.reload();
+  await expect(day).toHaveClass(/home-duty/);
+  for (const theme of ['light', 'dark'] as const) {
+    await page.emulateMedia({ colorScheme: theme });
+    expect(await day.evaluate(el => getComputedStyle(el).backgroundColor)).not.toBe('rgba(0, 0, 0, 0)');
+  }
+  await day.click();
+  await expect(page.locator('#shift-details')).not.toContainText('Нет смен');
+  await page.locator('.personal-day-content [data-edit-event]').click();
+  page.once('dialog', d => d.accept());
+  await page.locator('#delete-event').click();
+  await expect(page.locator('#dialog')).not.toBeVisible();
+  await expect(page.locator('.home-duty')).toHaveCount(0);
 });

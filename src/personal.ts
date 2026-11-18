@@ -1,5 +1,6 @@
 import type {
   CalendarEventDraft,
+  CalendarMark,
   DayMark,
   MonthRecord,
   SalarySettings,
@@ -9,6 +10,7 @@ import type {
   PersonalSettings,
   PayrollRecord,
 } from "./personal-types";
+import { buildCalendarDrafts } from "./calendar-sync";
 import { allMarksForDelta, candidateForMonth } from "./roster";
 import { workIntervals, tallinnWallTime } from "./intervals";
 import {
@@ -1106,4 +1108,65 @@ export function personalDrafts(
     });
   }
   return result;
+}
+
+// Use the same resolved intervals as analysis, payroll and the next-shift card.
+export function personalCalendarMarks(
+  months: MonthRecord[],
+  owner: string,
+  events: PersonalEvent[],
+  today = todayTallinn(),
+): CalendarMark[] {
+  const plan = personalPlan(months, owner, events, today);
+  const marks: CalendarMark[] = allMarksForDelta(months, owner).filter(
+    (m) => m.kind !== "hours" && m.kind !== "home",
+  );
+  for (const i of plan.work) {
+    const start = wall(i.start);
+    const end = wall(i.end);
+    const hours = (i.end - i.start) / 60;
+    const unchangedPdf = i.source === "pdf" && plan.original.some(
+      (o) => o.key === i.key && o.start === i.start && o.end === i.end,
+    );
+    const label = i.kind === "home" ? eventLabels.home
+      : i.source === "pdf" ? "Рабочая смена" : eventLabels[i.source];
+    const endDate = start.slice(0, 10) !== end.slice(0, 10)
+      ? ` (${end.slice(0, 10)})` : "";
+    marks.push({
+      date: start.slice(0, 10), kind: i.kind, raw: i.raw, hours, eventId: i.eventId,
+      description: unchangedPdf ? undefined
+        : `${label} · ${String(hours).replace(".", ",")} ч · ${start.slice(11, 16)}–${end.slice(11, 16)}${endDate}`,
+    });
+  }
+  for (const e of plan.events.filter((e) => !isWork(e))) {
+    for (const date of eventDates(e, today)) {
+      marks.push(e.kind === "vacation"
+        ? { date, kind: "leave", raw: "P", eventId: e.id, description: e.title || eventLabels[e.kind] }
+        : { date, kind: "other", eventId: e.id, raw: e.kind === "note" ? "●" : "◇", description: e.title || eventLabels[e.kind] });
+    }
+  }
+  return marks;
+}
+
+// Work entries always join ordinary sync; absence adjustments remain opt-in.
+export function desiredPersonalDrafts(
+  months: MonthRecord[],
+  owner: string,
+  events: PersonalEvent[],
+  month: string,
+  syncAbsences: boolean,
+  previous: CalendarEventDraft[] = [],
+): CalendarEventDraft[] {
+  const hasPdf = months.some((m) => m.id === month && candidateForMonth(m, owner));
+  const old = buildCalendarDrafts(month, owner, allMarksForDelta(months, owner));
+  const manual = personalDrafts(
+    personalPlan(months, owner, syncAbsences ? events : events.filter((e) => !isAbsence(e))),
+    month, owner, old,
+  );
+  // A missing PDF must not delete its exported events. Manual keys, however,
+  // must be rebuilt so edits and deletions are reflected without a PDF as well.
+  return hasPdf ? manual : [
+    ...previous.filter((d) => !d.key.startsWith("manual:") && !manual.some((m) => m.key === d.key)),
+    ...manual,
+  ];
 }

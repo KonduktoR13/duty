@@ -8,7 +8,8 @@ import {
 import {
   personalPlan,
   personalForecast,
-  personalDrafts,
+  desiredPersonalDrafts,
+  personalCalendarMarks,
   todayTallinn,
   wall,
   shiftMonth,
@@ -107,6 +108,7 @@ import type {
   CalendarReminderSettings,
   Candidate,
   DayMark,
+  CalendarMark,
   GoogleIntegrationSettings,
   MonthRecord,
   ParsedSchedule,
@@ -264,8 +266,8 @@ function allMarks(): DayMark[] {
   return allMarksForDelta(months, currentDelta);
 }
 
-function groupMarks(marks: DayMark[]) {
-  const grouped = new Map<string, DayMark[]>();
+function groupMarks(marks: CalendarMark[]) {
+  const grouped = new Map<string, CalendarMark[]>();
   for (const mark of marks)
     grouped.set(mark.date, [...(grouped.get(mark.date) || []), mark]);
   const rank: Record<DayMark["kind"], number> = {
@@ -680,6 +682,12 @@ function legacyNotice() {
   );
 }
 
+function calendarMarks() {
+  return currentDelta === personalSettings.owner
+    ? personalCalendarMarks(months, currentDelta, personalEvents)
+    : allMarks();
+}
+
 function calendarView() {
   return createCalendarView({
     months,
@@ -688,7 +696,7 @@ function calendarView() {
     legendExpanded,
     showColleagues,
     calendarMode,
-    allMarks,
+    allMarks: calendarMarks,
     groupMarks,
     todayId,
     date,
@@ -776,40 +784,11 @@ function desiredFor(month: string, deltaNumber = currentDelta) {
     deltaNumber,
     allMarksForDelta(months, deltaNumber),
   );
-  if (
-    !personalSettings.syncPersonal ||
-    deltaNumber !== personalSettings.owner
-  ) {
-    if (
-      !months.some((m) => m.id === month && candidateForMonth(m, deltaNumber))
-    )
-      return Object.values(syncFor(month, deltaNumber)?.events || {}).map(
-        (e) => e.draft,
-      );
-    return old;
+  const previous = Object.values(syncFor(month, deltaNumber)?.events || {}).map((e) => e.draft);
+  if (deltaNumber !== personalSettings.owner) {
+    return months.some((m) => m.id === month && candidateForMonth(m, deltaNumber)) ? old : previous;
   }
-  // Missing PDF is not a request to delete events previously exported from it.
-  if (
-    !months.some((m) => m.id === month && candidateForMonth(m, deltaNumber))
-  ) {
-    const previous = syncFor(month, deltaNumber);
-    const manual = personalDrafts(
-      personalPlan(months, deltaNumber, personalEvents),
-      month,
-      deltaNumber,
-      [],
-    );
-    return [
-      ...Object.values(previous?.events || {}).map((e) => e.draft),
-      ...manual.filter((d) => !previous?.events[d.key]),
-    ];
-  }
-  return personalDrafts(
-    personalPlan(months, deltaNumber, personalEvents),
-    month,
-    deltaNumber,
-    old,
-  );
+  return desiredPersonalDrafts(months, deltaNumber, personalEvents, month, personalSettings.syncPersonal, previous);
 }
 
 function calendarSyncCard(month: MonthRecord) {
@@ -824,7 +803,7 @@ function calendarSyncCard(month: MonthRecord) {
   if (!navigator.onLine) {
     tone = "error";
     label = "Офлайн · синхронизация недоступна";
-  } else if (!candidateAvailable && !sync?.syncedAt) {
+  } else if (!candidateAvailable && !sync?.syncedAt && !desired.length) {
     tone = "idle";
     label = `${currentDelta} не найден в этом PDF`;
   } else if (sync?.lastError === "auth") {
@@ -1182,7 +1161,7 @@ function prepareMonthTransition(
   const target =
     months.find((month) => month.id === adjacent(direction)) ||
     blankMonth(adjacent(direction));
-  const marksByDate = groupMarks(allMarks());
+  const marksByDate = groupMarks(calendarMarks());
   const start = direction > 0 ? 0 : -50;
   const end = direction > 0 ? -50 : 0;
   track.classList.remove("animating");

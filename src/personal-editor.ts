@@ -708,7 +708,7 @@ export function openPayrollSettings(
     <details><summary>История оклада и надбавки</summary>${config.salaryHistory.map((h) => `<p>${h.from} · ${euros(h.baseSalary)} · asendamine ${h.replacementEnabled ? h.replacementPercent + "%" : "выкл."} <button type="button" data-remove-salary="${h.from}">Убрать</button></p>`).join("")}
       ${field("Добавить ставку с даты", "salaryFrom", "", "date")}${field("Оклад с этой даты, €", "baseSalary", "", "text", 'inputmode="decimal"')}${field("Asendamise tasu, % (0 = выключена)", "replacementPercent", "", "text", 'inputmode="decimal"')}
     </details>
-    <details><summary>Google Calendar</summary><label class="check-line"><input name="syncPersonal" type="checkbox"${config.syncPersonal ? " checked" : ""}> Учитывать рабочие выходы и отсутствие при синхронизации</label><small>Изменения показываются перед отправкой. Причины болезни, сведения о ребёнке и суммы не передаются. Личные заметки остаются на устройстве.</small></details>
+    <details><summary>Google Calendar</summary><label class="check-line"><input name="syncPersonal" type="checkbox"${config.syncPersonal ? " checked" : ""}> Учитывать отсутствие при синхронизации</label><small>Ручные смены и koduvalve включаются в обычную синхронизацию. Изменения показываются перед отправкой. Причины болезни, сведения о ребёнке и суммы не передаются. Личные заметки остаются на устройстве.</small></details>
     <p id="payroll-error" class="form-error" role="alert"></p>
     </form><div class="dialog-actions"><button form="payroll-form" type="submit" class="primary">Сохранить</button></div></div>`,
     "settings",
