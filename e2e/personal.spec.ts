@@ -245,5 +245,5 @@ test("manual home duty without PDF colors the day and offers ordinary Google syn
   page.once('dialog', d => d.accept());
   await page.locator('#delete-event').click();
   await expect(page.locator('#dialog')).not.toBeVisible();
-  await expect(page.locator('.home-duty')).toHaveCount(0);
+  await expect(page.locator('[data-day].home-duty')).toHaveCount(0);
 });

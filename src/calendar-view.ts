@@ -1,3 +1,4 @@
+import { calendarLegendCount, calendarLegendView } from './calendar-legend'
 import { humanMonth, timeLabel } from './schedule'
 import {
   candidateForMonth,
@@ -381,9 +382,9 @@ export function createCalendarView(state: CalendarViewState) {
       calendarPage(month, marksByDate, foreignByDate) +
       '</div></div><div class="legend-section"><button class="legend-toggle" id="legend-toggle" aria-expanded="' +
       legendExpanded +
-      '" aria-controls="calendar-legend"><span>Легенда</span><small>7 обозначений</small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' +
+      '" aria-controls="calendar-legend"><span>Легенда</span><small>' + calendarLegendCount + ' обозначений</small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' +
       (legendExpanded ? ' expanded' : '') +
-      '" id="calendar-legend"><div class="legend"><span><i class="dot duty"></i>24 ч · суточная смена</span><span><i class="dot boundary"></i>16 ч на границе · часть смены</span><span><i class="dot daytime"></i>8 / 12 ч · рабочая отметка</span><span><i class="dot tentative"></i>#… · возможный выход</span><span><i class="dot home"></i>V… · koduvalve дома</span><span><i class="dot vacation"></i>P / P-et · отпуск · LHPu · уход за ребёнком</span><span><i class="dot annotation"></i>прочий код PDF</span></div></div></div></section></section>' +
+      '" id="calendar-legend"><div class="legend">' + calendarLegendView() + '</div></div></div></section></section>' +
       calendarSyncCard(month) +
       selectedDetails(marksByDate, month, foreignByDate)
     )
