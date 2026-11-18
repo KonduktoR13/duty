@@ -10,6 +10,19 @@ export function validDay(value: string) {
 export const dateSchema = z
   .string()
   .refine(validDay, "Укажите существующую дату");
+export const cancellationTargetSchema = z.object({
+  source: z.enum(["pdf", "manual"]),
+  key: z.string().min(1).max(150),
+  eventId: z.string().max(100).optional(),
+  start: z.number().finite().min(Date.parse("2000-01-01T00:00:00Z") / 60000).max(Date.parse("2100-12-31T23:59:00Z") / 60000),
+  end: z.number().finite().max(Date.parse("2101-01-03T00:00:00Z") / 60000),
+  kind: z.enum(["hours", "home"]),
+  raw: z.string().max(100),
+  occurrence: z.number().int().min(0).max(1000).default(0),
+  boundary16: z.boolean().default(false),
+  copies: z.number().int().min(1).max(1000).default(1),
+}).refine(t => t.end > t.start && t.occurrence < t.copies && (t.source !== "manual" || !!t.eventId), "Некорректная отменяемая смена");
+export type CancellationTarget = z.infer<typeof cancellationTargetSchema>;
 const money = z.number().finite().min(0).max(10_000_000);
 export const eventSchema = z
   .object({
@@ -23,6 +36,7 @@ export const eventSchema = z
       "care",
       "vacation",
       "timeoff",
+      "cancel",
     ]),
     owner: z.string().regex(/^(D\d+)?$/),
     start: dateSchema,
@@ -58,6 +72,7 @@ export const eventSchema = z
     paidDate: dateSchema.optional(),
     paymentDate: dateSchema.optional(),
     paymentTiming: z.enum(["unknown", "before", "salary"]).default("unknown"),
+    cancellation: z.object({ target: cancellationTargetSchema, state: z.enum(["active", "removed", "changed"]) }).optional(),
     linkedKey: z.string().max(150).optional(),
     linkConfirmed: z.boolean().default(false),
     // Exclusions are actual dates: illness interrupting a vacation is an explicit action.
@@ -67,6 +82,9 @@ export const eventSchema = z
   })
   .superRefine((e, ctx) => {
     const fail = (message: string) => ctx.addIssue({ code: "custom", message });
+    if (e.kind === "cancel" && (!e.cancellation || !e.owner)) fail("Укажите отменяемую смену и D-номер");
+    if (e.kind === "cancel" && e.cancellation && new Date(e.cancellation.target.start * 60000).toISOString().slice(0, 10) !== e.start) fail("Дата отмены не совпадает со сменой");
+    if (e.kind !== "cancel" && e.cancellation) fail("Отмена должна быть отдельной записью");
     if (e.end && e.end < e.start) fail("Окончание раньше начала");
     if (e.end && (Date.parse(e.end) - Date.parse(e.start)) / 86400000 > 3650)
       fail("Период длиннее 10 лет: проверьте даты");

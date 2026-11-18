@@ -400,7 +400,7 @@ test('update history opens from settings, supports back and keyboard, and stays 
   await page.reload()
   await page.locator('#settings').click()
   await page.locator('#updates-settings').click()
-  await expect(page.locator('.update-entry')).toHaveCount(10)
+  await expect(page.locator('.update-entry')).toHaveCount(11)
   await page.keyboard.press('Escape')
   await expect(page.locator('#dialog')).not.toBeVisible()
 })
@@ -413,13 +413,13 @@ test('full legend covers every manual kind, shares day colors and fits 320px off
   const legend = page.locator('#calendar-legend')
   await toggle.click()
   await expect(toggle).toHaveAttribute('aria-expanded', 'true')
-  await expect(toggle).toContainText('17 обозначений')
+  await expect(toggle).toContainText('18 обозначений')
   const manual = legend.locator('.legend-block').filter({ hasText: 'Ручные записи' })
-  await expect(manual.locator('.legend-row')).toHaveCount(8)
+  await expect(manual.locator('.legend-row')).toHaveCount(9)
   for (const label of ['Дополнительный выход', 'Erakorraline', 'Koduvalve', 'Отпуск', 'Больничный', 'Уход за ребёнком', 'Компенсационный отдых', 'Своя запись']) {
     await expect(manual).toContainText(label)
   }
-  await expect(manual.locator('.legend-row').last().locator('.legend-swatch')).toHaveCount(6)
+  await expect(manual.locator('.legend-row').filter({ hasText: 'Своя запись' }).locator('.legend-swatch')).toHaveCount(6)
   for (const theme of ['light', 'dark'] as const) {
     await page.emulateMedia({ colorScheme: theme })
     const color = await page.locator('[data-day="2026-09-07"]').evaluate(el => getComputedStyle(el).backgroundColor)

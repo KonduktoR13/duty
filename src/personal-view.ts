@@ -1,3 +1,5 @@
+import { cancellationAgendaRow, cancellationDayView } from "./cancellation-view";
+import { reconcileCancellations, shiftTargets } from "./shift-cancellations";
 import { esc, openDialog } from "./ui";
 import type { PayrollContext, PersonalForecast } from "./personal";
 import {
@@ -63,10 +65,22 @@ export function decoratePersonalCalendar(
     welcome.querySelector("#import")?.after(b);
   }
   if (!own) return;
-  const es = c.events.filter((e) => belongs(e, c.config.owner));
+  const targets = shiftTargets(c.months, c.config.owner, c.events);
+  const cancellations = reconcileCancellations(c.months, c.events).filter(e => e.kind === "cancel" && e.owner === c.config.owner);
+  const plan = personalPlan(c.months, c.config.owner, c.events);
+  const hiddenIds = new Set(plan.cancelled.map(i => i.eventId).filter(Boolean));
+  const es = c.events.filter((e) => e.kind !== "cancel" && !hiddenIds.has(e.id) && belongs(e, c.config.owner));
   for (const cell of document.querySelectorAll<HTMLElement>("[data-day]")) {
     const date = cell.dataset.day!,
       events = es.filter((e) => eventTouches(e, date));
+    const history = cancellations.filter(e => e.start === date);
+    if (history.length) {
+      const flag = document.createElement("small");
+      flag.className = "cancelled-marker";
+      flag.textContent = history.some(e => e.cancellation?.state === "active") ? "⊘" : "!";
+      cell.append(flag);
+      cell.setAttribute("aria-label", (cell.getAttribute("aria-label") || date) + "; есть отметка об отмене смены");
+    }
     if (!events.length) continue;
     const marker = document.createElement("span");
     marker.className = "personal-markers";
@@ -94,6 +108,9 @@ export function decoratePersonalCalendar(
   }
   const agenda = document.querySelector(".agenda");
   if (agenda) {
+    for (const e of cancellations.filter(e => e.start.startsWith(month))) {
+      agenda.insertAdjacentHTML("beforeend", cancellationAgendaRow(e, targets));
+    }
     for (const e of es.filter(
       (e) => e.start <= month + "-31" && eventEnd(e) >= month + "-01",
     )) {
@@ -130,7 +147,7 @@ export function decoratePersonalCalendar(
   }
   const content = document.querySelector("#shift-details .detail-content");
   if (content && selectedDate) {
-    if (es.some((e) => eventTouches(e, selectedDate))) {
+    if (es.some((e) => eventTouches(e, selectedDate)) || cancellations.some(e => e.start === selectedDate)) {
       content.querySelector(".empty-detail")?.remove();
       if (content.querySelector(":scope > b")?.textContent === "Нет смен") content.querySelector(":scope > b")?.remove();
     }
@@ -141,6 +158,7 @@ export function decoratePersonalCalendar(
         .filter((e) => eventTouches(e, selectedDate))
         .map(eventRow)
         .join("") +
+      cancellationDayView(c, selectedDate) +
       `<button class="primary" id="add-day-personal">＋ Добавить на этот день</button>`;
     content.append(div);
     document
@@ -154,7 +172,7 @@ export function personalSummary(
   f = personalForecast(c, month),
 ) {
   const source = intervalStats(f.plan.original, month);
-  return `<section class="personal-summary"><h2>Ваши изменения</h2><p class="field-hint">По личному плану и внесённой работе ${helpButton("quality")}</p><div class="pay-row"><span>По исходному графику</span><b>${hoursLabel(source.work)}</b></div><div class="pay-row"><span>Пропущено по отсутствиям</span><b>−${hoursLabel(intervalStats(f.plan.blocked, month).work)}</b></div><div class="pay-row"><span>Дополнительные выходы</span><b>${hoursLabel(f.stat.extra)}</b></div>${f.stat.home ? `<div class="pay-row"><span>Koduvalve · отдельно от работы</span><b>${hoursLabel(f.stat.home)}</b></div>` : ""}<div class="pay-row"><span>Erakorraline</span><b>${hoursLabel(f.stat.emergency)}</b></div><div class="pay-row total"><span>По плану с изменениями</span><b>${hoursLabel(f.stat.work)}</b></div><details><summary>Свои часы: ${hoursLabel(f.ownHours)}</summary>${
+  return `<section class="personal-summary"><h2>Ваши изменения</h2><p class="field-hint">По личному плану и внесённой работе ${helpButton("quality")}</p><div class="pay-row"><span>По исходному графику</span><b>${hoursLabel(source.work)}</b></div><div class="pay-row"><span>Отменено вами · работа</span><b>−${hoursLabel(intervalStats(f.plan.cancelled, month).work)}</b></div>${intervalStats(f.plan.cancelled, month).home ? `<div class="pay-row"><span>Отменено вами · koduvalve</span><b>−${hoursLabel(intervalStats(f.plan.cancelled, month).home)}</b></div>` : ""}<div class="pay-row"><span>Пропущено по отсутствиям</span><b>−${hoursLabel(intervalStats(f.plan.blocked, month).work)}</b></div><div class="pay-row"><span>Дополнительные выходы</span><b>${hoursLabel(f.stat.extra)}</b></div>${f.stat.home ? `<div class="pay-row"><span>Koduvalve · отдельно от работы</span><b>${hoursLabel(f.stat.home)}</b></div>` : ""}<div class="pay-row"><span>Erakorraline</span><b>${hoursLabel(f.stat.emergency)}</b></div><div class="pay-row total"><span>По плану с изменениями</span><b>${hoursLabel(f.stat.work)}</b></div><details><summary>Свои часы: ${hoursLabel(f.ownHours)}</summary>${
     c.events
       .filter((e) => e.kind === "note" && e.start.startsWith(month))
       .map(eventRow)

@@ -1,3 +1,4 @@
+import { activeCancellations, cancelled, cancelledLinkedEvent, cancelledDraft, shiftTargets } from "./shift-cancellations";
 import type {
   CalendarEventDraft,
   CalendarMark,
@@ -30,6 +31,7 @@ export const eventLabels: Record<PersonalEvent["kind"], string> = {
   care: "Уход за ребёнком",
   vacation: "Отпуск",
   timeoff: "Компенсационный отдых",
+  cancel: "Отмена смены",
 };
 export const todayTallinn = () => tallinnWallTime().slice(0, 10);
 export const minute = (s: string) =>
@@ -88,6 +90,8 @@ export type PersonalInterval = {
 };
 export type Plan = {
   original: PersonalInterval[];
+  availableOriginal: PersonalInterval[];
+  cancelled: PersonalInterval[];
   work: PersonalInterval[];
   blocked: PersonalInterval[];
   conflicts: string[];
@@ -170,20 +174,45 @@ export function personalPlan(
     source: "pdf",
     incomplete: i.incomplete,
   }));
-  let work = [...original];
+  const cancellations = activeCancellations(months, all, owner);
+  const targets = shiftTargets(months, owner, all);
+  const pdfTargets = new Map(targets.filter(t => t.source === "pdf").map(t => [t.key, t]));
+  const cancelledIntervals: PersonalInterval[] = [];
+  const availableOriginal = original.filter(i => {
+    const target = pdfTargets.get(i.key);
+    if (target && cancelled(target, cancellations, months)) { cancelledIntervals.push({ ...i }); return false; }
+    return true;
+  });
+  let work = [...availableOriginal];
   const conflicts: string[] = [];
   for (const e of events
     .filter(isWork)
     .sort((a, b) => a.createdAt - b.createdAt)) {
     const b = eventBounds(e);
+    const target = targets.find(t => t.eventId === e.id || (t.source === "pdf" && e.linkConfirmed && t.key === e.linkedKey && t.kind === (e.kind === "home" ? "home" : "hours") && t.start === b.start && t.end === b.end));
+    const linkedCancellation = cancelledLinkedEvent(e, cancellations);
+    if (linkedCancellation) {
+      const previous = cancelledIntervals.find(i => i.start === b.start && i.end === b.end && i.key === linkedCancellation.key);
+      if (previous) previous.eventId = e.id;
+      else cancelledIntervals.push({ ...b, key: linkedCancellation.key, raw: linkedCancellation.raw, kind: linkedCancellation.kind, source: "pdf", eventId: e.id });
+      continue;
+    }
+    if (target && cancelled(target, cancellations, months)) {
+      if (target.source === "manual") cancelledIntervals.push({ ...b, key: target.key, raw: target.raw, kind: target.kind, source: e.kind as "extra" | "emergency" | "home", eventId: e.id });
+      continue;
+    }
     const overlaps = work.filter((i) => intersect(i, b));
     if (
       e.linkConfirmed &&
       !original.some(
         (i) => i.key === e.linkedKey && i.kind === (e.kind === "home" ? "home" : "hours") && i.start === b.start && i.end === b.end,
       )
-    )
+    ) {
       conflicts.push(e.id);
+      // A lost/changed PDF link is not an independent extra shift. Keep the
+      // record for review instead of silently reviving it after an import.
+      continue;
+    }
     const linked =
       overlaps.length === 1 &&
       overlaps[0].source === "pdf" &&
@@ -225,6 +254,8 @@ export function personalPlan(
     .sort((a, b) => a.start - b.start);
   return {
     original,
+    availableOriginal,
+    cancelled: cancelledIntervals,
     work,
     blocked,
     conflicts: [...new Set(conflicts)],
@@ -358,7 +389,7 @@ export function absenceReduction(
           (m) => m.id === month && candidateForMonth(m, c.config.owner),
         )
           ? norm / ds.length
-          : plan.original.reduce(
+          : plan.availableOriginal.reduce(
               (s, i) =>
                 s +
                 (i.kind === "hours"
@@ -444,7 +475,7 @@ function earnedMonth(c: PayrollContext, month: string) {
                 (m) => m.id === month && candidateForMonth(m, c.config.owner),
               )
               ? norm / ds.length
-              : plan.original.reduce(
+              : plan.availableOriginal.reduce(
                   (s, i) =>
                     s +
                     (i.kind === "hours"
@@ -768,7 +799,7 @@ export function periodBalance(
               end: minute(shiftDay(d, 1)),
             })),
       );
-    const credited = plan.original
+    const credited = plan.availableOriginal
       .filter((i) => i.kind === "hours")
       .reduce(
         (s, i) =>
@@ -1138,7 +1169,7 @@ export function personalCalendarMarks(
         : `${label} · ${String(hours).replace(".", ",")} ч · ${start.slice(11, 16)}–${end.slice(11, 16)}${endDate}`,
     });
   }
-  for (const e of plan.events.filter((e) => !isWork(e))) {
+  for (const e of plan.events.filter((e) => !isWork(e) && e.kind !== "cancel")) {
     for (const date of eventDates(e, today)) {
       marks.push(e.kind === "vacation"
         ? { date, kind: "leave", raw: "P", eventId: e.id, description: e.title || eventLabels[e.kind] }
@@ -1166,7 +1197,7 @@ export function desiredPersonalDrafts(
   // A missing PDF must not delete its exported events. Manual keys, however,
   // must be rebuilt so edits and deletions are reflected without a PDF as well.
   return hasPdf ? manual : [
-    ...previous.filter((d) => !d.key.startsWith("manual:") && !manual.some((m) => m.key === d.key)),
+    ...previous.filter((d) => !d.key.startsWith("manual:") && !manual.some((m) => m.key === d.key) && !cancelledDraft(d, activeCancellations(months, events, owner))),
     ...manual,
   ];
 }

@@ -541,3 +541,12 @@
   margin: 0;
   line-height: 1.5;
 }
+
+.cancellation-controls { display: grid; gap: 10px; margin: 8px 0; }
+.cancellation-row { display: grid; min-width: 0; overflow-wrap: anywhere; gap: 7px; padding: 10px; border: 1px solid var(--line); border-radius: 12px; }
+.cancellation-row button { min-height: 44px; justify-self: start; border-radius: 12px; padding: 8px 12px; background: var(--soft); color: var(--accent); font-size: 13px; font-weight: 700; }
+.cancellation-row small { display: block; margin-top: 4px; line-height: 1.4; }
+.cancelled-record { color: var(--muted); }
+.cancelled-marker { color: var(--muted); font-size: 11px; font-weight: 800; }
+.legend .legend-swatch.cancelled-swatch { background: transparent; border: 1px solid var(--muted); position: relative; }
+.cancelled-swatch::after { content: ''; position: absolute; width: 100%; top: 50%; left: 0; border-top: 1px solid var(--muted); transform: rotate(-35deg); }

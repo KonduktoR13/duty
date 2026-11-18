@@ -80,8 +80,9 @@ function employeeWorkloadView(
   monthId: string,
   currentDelta: string,
   sort: EmployeeWorkloadSort,
+  personalIntervals?: WorkInterval[],
 ) {
-  const rows = rankEmployeeWorkload(months, monthId, sort);
+  const rows = rankEmployeeWorkload(months, monthId, sort, personalIntervals ? { owner: currentDelta, intervals: personalIntervals } : undefined);
   if (!rows.length) return "";
   const own = rows.find((row) => row.deltaNumber === currentDelta);
   const position = own
@@ -113,7 +114,7 @@ function employeeWorkloadView(
           .join("")}</tbody>
       </table>
       <p class="workload-sort-hint">Нажмите заголовок, чтобы сравнить по месяцу или общей сумме.</p>
-      <details class="workload-explanation"><summary>Как считаются часы</summary><p id="employee-workload-note">Сортировка — по убыванию. При равных часах сотрудники делят место. Переходящие смены делятся по полуночи; V и возможные выходы # не включены. Всего — за загруженные месяцы (${months.length}). Без соседних графиков данные на границах могут быть неполными.</p></details>
+      <details class="workload-explanation"><summary>Как считаются часы</summary><p id="employee-workload-note">${personalIntervals ? "Ваша строка учитывает ручные изменения и отмены; остальные сотрудники — по PDF. " : ""}Сортировка — по убыванию. При равных часах сотрудники делят место. Переходящие смены делятся по полуночи; V и возможные выходы # не включены. Всего — за загруженные месяцы (${months.length}). Без соседних графиков данные на границах могут быть неполными.</p></details>
       ${sourceRosterIncomplete(months, monthId) ? '<p class="employee-workload-note">В сохранённом графике доступны не все D-номера. Для полного списка импортируйте PDF повторно.</p>' : ""}
     </div>
   </details>`;
@@ -146,6 +147,7 @@ export function analysisView(
     month.id,
     currentDelta,
     workloadSort,
+    personalIntervals,
   );
   if (!source || !candidateForMonth(source, currentDelta))
     return (

@@ -129,7 +129,7 @@ const pdfData = z
   .max(30 * 1024 * 1024);
 const schema = z.object({
   format: z.literal("my-shifts-backup"),
-  version: z.union([z.literal(1), z.literal(2)]),
+  version: z.union([z.literal(1), z.literal(2), z.literal(3)]),
   events: z.array(eventSchema).max(100000).optional(),
   payroll: z.array(payrollRecordSchema).max(600).optional(),
   createdAt: z.string(),
@@ -157,7 +157,7 @@ export async function createBackup() {
   const content = {
     ...snapshot,
     format: "my-shifts-backup",
-    version: 2,
+    version: 3,
     createdAt: new Date().toISOString(),
     pdfs: await Promise.all(
       snapshot.pdfs.map(async ([id, pdf]) => [id, await encode(pdf)]),
@@ -180,8 +180,8 @@ export async function readBackup(file: Blob): Promise<Snapshot> {
       "Формат резервной копии не поддерживается или данные повреждены.",
     );
   const data = parsed.data;
-  if (data.version === 2 && (!data.events || !data.payroll))
-    throw new Error("Формат копии v2 неполный.");
+  if (data.version >= 2 && (!data.events || !data.payroll))
+    throw new Error("Формат копии v2/v3 неполный.");
   if (
     new Set(data.events?.map((e) => e.id)).size !==
       (data.events?.length || 0) ||

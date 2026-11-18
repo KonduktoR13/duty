@@ -28,6 +28,7 @@ const sections = [
       { label: 'Уход за ребёнком · больничный по уходу', tones: [personalTone('purple')] },
       { label: 'Компенсационный отдых', tones: [personalTone('purple')] },
       { label: 'Своя запись · выбранный цвет', tones: personalColors.map(personalTone) },
+      { label: '⊘ · отменена вами; ! · отмена завершена или смена изменилась', tones: ['cancelled-swatch'] },
     ],
   },
 ]

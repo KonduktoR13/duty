@@ -1,3 +1,4 @@
+import { reconcileCancellations } from "./shift-cancellations";
 import type { CalendarMonthSync, MonthRecord, SalarySettings } from "./types";
 import type {
   PersonalEvent,
@@ -98,6 +99,15 @@ function tx<T>(
     return () => r.result;
   });
 }
+function reconcileInTransaction(t: IDBTransaction) {
+  const months = t.objectStore("months").getAll();
+  const events = t.objectStore("events").getAll();
+  events.onsuccess = () => {
+    for (const event of reconcileCancellations(months.result, events.result)) {
+      if (event !== events.result.find((e: PersonalEvent) => e.id === event.id)) t.objectStore("events").put(event);
+    }
+  };
+}
 export const storage = {
   saveSalarySettings: (personal: PersonalSettings, salary: SalarySettings) =>
     transaction(["settings"], "readwrite", (t) => {
@@ -107,8 +117,9 @@ export const storage = {
       return () => undefined;
     }),
   saveEvents: (events: PersonalEvent[]) =>
-    transaction(["events"], "readwrite", (t) => {
+    transaction(["events", "months"], "readwrite", (t) => {
       for (const event of events) t.objectStore("events").put(event);
+      reconcileInTransaction(t);
       return () => undefined;
     }),
   savePayrollSettings: (config: PersonalSettings, record?: PayrollRecord) =>
@@ -119,8 +130,12 @@ export const storage = {
     }),
   events: () => tx<PersonalEvent[]>("events", "readonly", (s) => s.getAll()),
   putEvent: (event: PersonalEvent) =>
-    tx("events", "readwrite", (s) => s.put(event)),
-  removeEvent: (id: string) => tx("events", "readwrite", (s) => s.delete(id)),
+    storage.saveEvents([event]),
+  removeEvent: (id: string) => transaction(["events", "months"], "readwrite", (t) => {
+    t.objectStore("events").delete(id);
+    reconcileInTransaction(t);
+    return () => undefined;
+  }),
   payroll: () => tx<PayrollRecord[]>("payroll", "readonly", (s) => s.getAll()),
   putPayroll: (record: PayrollRecord) =>
     tx("payroll", "readwrite", (s) => s.put(record)),
@@ -133,7 +148,7 @@ export const storage = {
   put: (m: MonthRecord) => tx("months", "readwrite", (s) => s.put(m)),
   saveImport: (month: MonthRecord, pdf: Blob) =>
     transaction(
-      ["months", "pdfs", "revisions", "settings"],
+      ["months", "pdfs", "revisions", "settings", "events"],
       "readwrite",
       (t) => {
         const old = t.objectStore("months").get(month.id),
@@ -148,6 +163,7 @@ export const storage = {
           t.objectStore("months").put(month);
           t.objectStore("pdfs").put(pdf, month.id);
           t.objectStore("settings").put(month.deltaNumber, "deltaNumber");
+          reconcileInTransaction(t);
         };
         return () => undefined;
       },
@@ -155,7 +171,7 @@ export const storage = {
   revision: (id: string) =>
     tx<Revision | undefined>("revisions", "readonly", (s) => s.get(id)),
   restoreRevision: (id: string) =>
-    transaction(["months", "pdfs", "revisions"], "readwrite", (t) => {
+    transaction(["months", "pdfs", "revisions", "events"], "readwrite", (t) => {
       const r = t.objectStore("revisions").get(id);
       r.onsuccess = () => {
         if (!r.result) return;
@@ -163,11 +179,12 @@ export const storage = {
         if (r.result.pdf) t.objectStore("pdfs").put(r.result.pdf, id);
         else t.objectStore("pdfs").delete(id);
         t.objectStore("revisions").delete(id);
+        reconcileInTransaction(t);
       };
       return () => undefined;
     }),
   remove: (id: string) =>
-    transaction(["months", "pdfs", "revisions"], "readwrite", (t) => {
+    transaction(["months", "pdfs", "revisions", "events"], "readwrite", (t) => {
       for (const name of ["months", "pdfs", "revisions"])
         t.objectStore(name).delete(id);
       return () => undefined;
@@ -229,6 +246,7 @@ export const storage = {
       for (const sync of snapshot.syncs) t.objectStore("syncs").put(sync);
       for (const revision of snapshot.revisions)
         t.objectStore("revisions").put(revision);
+      reconcileInTransaction(t);
       return () => undefined;
     }),
 };

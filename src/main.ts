@@ -1,3 +1,5 @@
+import { cancellationStatus, shiftLabel } from "./cancellation-view";
+import { activeCancellations, cancellationMatches, cancelled, newCancellation, reconcileCancellations, sameShift, shiftTargets, targetDate } from "./shift-cancellations";
 import { updateHistoryView } from "./update-history";
 import {
   defaultPersonalSettings,
@@ -172,7 +174,51 @@ function beginPersonal(
     id ? personalEvents.find((e) => e.id === id) : undefined,
   );
 }
+function showCancellation(index: number) {
+  if (!personalSettings.owner || currentDelta !== personalSettings.owner) return;
+  const target = shiftTargets(months, currentDelta, personalEvents)[index];
+  if (!target || cancelled(target, activeCancellations(months, personalEvents, currentDelta))) return;
+  open(`<h2>Отменить ${target.kind === "home" ? "дежурство" : "смену"}?</h2><p>${esc(targetDate(target))} · ${esc(shiftLabel(target))}</p><p>Запись будет исключена из рабочего плана, часов и связанных надбавок. Отмена сама по себе не уменьшает оклад. Остальные записи дня сохранятся.</p><p>В Google событие будет удалено при следующей синхронизации с просмотром изменений. Отмену можно снять.</p><button class="primary" id="confirm-cancellation">Отменить смену</button><button id="cancel">Оставить смену</button>`);
+  document.querySelector("#cancel")?.addEventListener("click", close);
+  document.querySelector<HTMLButtonElement>("#confirm-cancellation")!.onclick = () => run(async () => {
+    document.querySelector<HTMLButtonElement>("#confirm-cancellation")!.disabled = true;
+    if (!shiftTargets(await storage.months(), currentDelta, await storage.events()).some(t => sameShift(t, target))) throw new Error("Смена изменилась. Откройте день заново.");
+    if (cancelled(target, activeCancellations(await storage.months(), await storage.events(), currentDelta))) { close(); await personalHost.changed(targetDate(target)); return; }
+    const cancellation = newCancellation(target, currentDelta);
+    await storage.putEvent(cancellation);
+    close();
+    await personalHost.changed(targetDate(target));
+    document.querySelector<HTMLButtonElement>(`[data-restore-shift="${cancellation.id}"]`)?.focus({ preventScroll: true });
+  });
+}
+function showRestoreCancellation(id: string) {
+  const event = personalEvents.find(e => e.id === id && e.kind === "cancel" && e.owner === currentDelta);
+  if (!event?.cancellation || currentDelta !== personalSettings.owner) return;
+  const targets = shiftTargets(months, currentDelta, personalEvents);
+  const exists = targets.some(t => cancellationMatches(event.cancellation!.target, t, months, event.owner));
+  const restore = event.cancellation.state === "active" && exists;
+  const afterEvents = personalEvents.filter(e => e.id !== id);
+  const before = personalPlan(months, currentDelta, personalEvents);
+  const after = personalPlan(months, currentDelta, afterEvents);
+  if (restore && after.conflicts.some(key => !before.conflicts.includes(key))) {
+    open('<h2>Есть пересечение</h2><p>На это время добавлена другая запись. Сначала измените или удалите пересекающийся выход, затем восстановите смену.</p><button id="cancel">Понятно</button>');
+    document.querySelector("#cancel")?.addEventListener("click", close);
+    return;
+  }
+  open(`<h2>${restore ? "Восстановить смену?" : "Убрать отметку об отмене?"}</h2><p>${esc(shiftLabel(event.cancellation.target))}</p><p>${restore ? "Смена вернётся в план и расчёты. При следующей синхронизации Google будет предложено восстановить событие." : "Это уберёт только вашу отметку. Отсутствующая или изменённая смена из старого PDF не будет создана заново."}</p><button class="primary" id="confirm-restore">${restore ? "Восстановить смену" : "Убрать отметку"}</button><button id="cancel">Назад</button>`);
+  document.querySelector("#cancel")?.addEventListener("click", close);
+  document.querySelector<HTMLButtonElement>("#confirm-restore")!.onclick = () => run(async () => {
+    await storage.removeEvent(id);
+    close();
+    await personalHost.changed(event.start);
+    const index = shiftTargets(months, currentDelta, personalEvents).findIndex(t => cancellationMatches(event.cancellation!.target, t, months, currentDelta));
+    document.querySelector<HTMLButtonElement>(index >= 0 ? `[data-cancel-shift="${index}"]` : `[data-day="${event.start}"]`)?.focus({ preventScroll: true });
+  });
+}
 function bindPersonalActions(root: ParentNode = document) {
+  root.querySelectorAll<HTMLButtonElement>("[data-cancel-shift]").forEach(button => button.onclick = () => showCancellation(Number(button.dataset.cancelShift)));
+  root.querySelectorAll<HTMLButtonElement>("[data-restore-shift]").forEach(button => button.onclick = () => showRestoreCancellation(button.dataset.restoreShift!));
+  root.querySelectorAll<HTMLButtonElement>("[data-cancel-day]").forEach(button => button.onclick = () => selectDay(button.dataset.cancelDay!));
   root
     .querySelectorAll<HTMLButtonElement>("[data-add-timeoff]")
     .forEach(
@@ -923,7 +969,7 @@ function bind() {
         open(
           "<h2>Вернуть предыдущий график?</h2><p>" +
             humanMonth(id) +
-            '. События Google пока не изменятся. После возврата проверьте синхронизацию.</p><button class="primary" id="confirm-revision">Вернуть предыдущую версию</button><button id="cancel">Отмена</button>',
+            '. События Google пока не изменятся. Личные отмены будут сверены с возвращённым графиком; ранее завершённая отмена не возобновится автоматически. После возврата проверьте дни с отметкой ! и синхронизацию.</p><button class="primary" id="confirm-revision">Вернуть предыдущую версию</button><button id="cancel">Отмена</button>',
         );
         document.querySelector("#cancel")?.addEventListener("click", close);
         document
@@ -1431,6 +1477,24 @@ async function chooseDelta(parsed: ParsedSchedule) {
   document.querySelector("#cancel")!.addEventListener("click", close);
 }
 
+function cancellationImportReview(candidate: Candidate) {
+  if (!pending) return "";
+  const id = pending.parsed.month;
+  const projected = [...months.filter(m => m.id !== id), {
+    ...blankMonth(id), marks: candidate.marks, shifts: candidate.shifts,
+    candidates: pending.parsed.candidates, rosterComplete: true, deltaNumber: candidate.number,
+  }];
+  const next = reconcileCancellations(projected, personalEvents);
+  const rows = next.filter(e => e.kind === "cancel").flatMap(e => {
+    const before = personalEvents.find(p => p.id === e.id)!;
+    const t = e.cancellation!.target;
+    const targets = shiftTargets(projected, e.owner, personalEvents);
+    const relevant = e.start.startsWith(id) || e.cancellation?.state !== before.cancellation?.state;
+    if (!relevant) return [];
+    return [`<li><b>${esc(e.owner)} · ${esc(e.start)}</b><span>${esc(shiftLabel(t))} — ${esc(cancellationStatus(e, targets, projected))}${e.cancellation!.state === "changed" ? ". Проверьте новую смену после импорта." : ""}</span></li>`];
+  });
+  return rows.length ? `<aside class="sync-warning"><b>Ваши отмены после импорта</b><ul class="import-diff">${rows.join("")}</ul><span>Изменённая или вновь появившаяся смена действует по новому PDF. При необходимости отмените её отдельно. Google изменится только после синхронизации.</span></aside>` : "";
+}
 async function reviewPick(candidate: Candidate) {
   if (!pending) return;
   const old = months.find((month) => month.id === pending!.parsed.month);
@@ -1450,6 +1514,7 @@ async function reviewPick(candidate: Candidate) {
       humanMonth(pending.parsed.month) +
       "</p>" +
       importReview(candidate, old) +
+      cancellationImportReview(candidate) +
       (personalEvents.some((e) => e.start.slice(0, 7) === pending!.parsed.month)
         ? '<aside class="sync-warning"><b>Ваши записи сохранятся</b><span>Если выход появился в PDF, откройте его запись и свяжите совпавшую смену. Пересекающееся время не суммируется.</span></aside>'
         : "") +
