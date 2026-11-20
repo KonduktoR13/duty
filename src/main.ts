@@ -53,7 +53,6 @@ import {
   candidatesForMonth,
   isWorkMark,
   knownDeltaNumbers,
-  type ForeignDayEntry,
 } from "./roster";
 import {
   applyCalendarSync,
@@ -284,7 +283,6 @@ let legendExpanded = false;
 let legendMonthOnly = true;
 let lastRenderedSection: AppSection = section;
 let calendarMode: "grid" | "list" = "grid";
-let showColleagues = false;
 let employeeWorkloadSort: EmployeeWorkloadSort = "month";
 let revisions = new Set<string>();
 let deltaReturnToSettings = false;
@@ -747,7 +745,6 @@ function calendarView() {
     currentDelta,
     selectedDate,
     legendExpanded,
-    showColleagues,
     calendarMode,
     allMarks: calendarMarks,
     groupMarks,
@@ -762,9 +759,8 @@ function monthView(month: MonthRecord) {
 function calendarPage(
   month: MonthRecord,
   marks: Map<string, DayMark[]>,
-  foreign?: Map<string, ForeignDayEntry[]>,
 ) {
-  return calendarView().calendarPage(month, marks, foreign);
+  return calendarView().calendarPage(month, marks);
 }
 
 function syncFor(month: string, deltaNumber = currentDelta) {
@@ -1010,13 +1006,6 @@ function bind() {
     render();
     run(() => storage.set("calendarMode", calendarMode));
   });
-  document
-    .querySelector("#show-colleagues")
-    ?.addEventListener("change", (event) => {
-      showColleagues = (event.target as HTMLInputElement).checked;
-      render();
-      run(() => storage.set("showColleagues", showColleagues));
-    });
   document
     .querySelectorAll<HTMLElement>("[data-agenda-day]")
     .forEach(
@@ -3134,7 +3123,6 @@ async function start() {
       (await storage.setting<"grid" | "list">("calendarMode")) === "list"
         ? "list"
         : "grid";
-    showColleagues = Boolean(await storage.setting("showColleagues"));
     legendMonthOnly = (await storage.setting<boolean>("legendMonthOnly")) !== false;
     await refresh();
   } catch (error) {

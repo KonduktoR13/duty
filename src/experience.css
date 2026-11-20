@@ -83,7 +83,7 @@
   background: var(--accent);
   color: white;
 }
-.colleagues-toggle {
+.legend-filter {
   display: flex;
   align-items: center;
   gap: 7px;
@@ -91,7 +91,7 @@
   color: var(--muted);
   font-size: 13px;
 }
-.colleagues-toggle input {
+.legend-filter input {
   width: 18px;
   height: 18px;
   accent-color: var(--accent);
@@ -126,7 +126,6 @@
   padding: 0 2px;
 }
 .day.today.day-empty,
-.day.today.day-empty.has-colleagues,
 .day.today:not(.day-empty) {
   box-shadow: none;
 }
@@ -138,9 +137,6 @@
   margin: 0 0 2px 3px;
   border-radius: 50%;
   background: currentColor;
-}
-.day-empty.has-colleagues {
-  background: transparent;
 }
 .day.selected {
   outline-width: 2px;
@@ -568,9 +564,6 @@ dialog > button {
   .documents-intro {
     color: #fff;
   }
-  .day-empty.has-colleagues {
-    background: transparent;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -586,7 +579,7 @@ dialog > button {
     display: grid;
     max-width: 100%;
     grid-template-columns: 220px minmax(0, 1fr);
-    grid-template-rows: repeat(4, max-content);
+    grid-template-rows: repeat(3, max-content);
     gap: 8px 14px;
     align-content: start;
   }
@@ -607,13 +600,9 @@ dialog > button {
     margin: 0;
     flex-wrap: wrap;
   }
-  .app-content:has(.calendar-group) > .colleagues-toggle {
-    grid-column: 1;
-    grid-row: 3;
-  }
   .calendar-group {
     grid-column: 2;
-    grid-row: 1/5;
+    grid-row: 1/4;
   }
   .calendar-group .calendar {
     padding: 8px;
@@ -625,6 +614,6 @@ dialog > button {
   }
   .app-content:has(.calendar-group) > .sync-card {
     grid-column: 1;
-    grid-row: 4;
+    grid-row: 3;
   }
 }

@@ -72,8 +72,6 @@ header { position:relative; z-index:4; border-bottom:1px solid #e5dce9aa; paddin
 .day,.day-blank { display:flex; aspect-ratio:1; min-height:40px; flex-direction:column; align-items:center; justify-content:center; border-radius:13px; }
 .day { position:relative; color:#211728; }
 .day-empty { background:transparent; cursor:pointer; }
-.day-empty.has-colleagues { background:#f0ebf3; }
-.colleague-dot { position:absolute; bottom:7px; width:5px; height:5px; border-radius:50%; background:#88778f; }
 .day b { line-height:1.05; font-weight:800; }
 .day small { max-width:100%; overflow:hidden; font-size:8px; font-weight:800; letter-spacing:-.2px; line-height:1.05; text-overflow:ellipsis; white-space:nowrap; }
 .day .home-badge { display:inline-block; margin-top:1px; border-radius:5px; padding:1px 3px; background:#394795; color:#fff; font-size:7px; font-style:normal; font-weight:800; line-height:1; }
@@ -93,7 +91,6 @@ header { position:relative; z-index:4; border-bottom:1px solid #e5dce9aa; paddin
 .day.mixed-home-other { background:linear-gradient(135deg,#5b6470 0 57%,#4b5db2 57%); color:#fff; }
 .day.selected { z-index:1; outline:3px solid #211728; outline-offset:1px; }
 .day.today.day-empty { background:#e8dbee; box-shadow:inset 0 0 0 1px #7c4592; }
-.day.today.day-empty.has-colleagues { background:#dfd0e6; }
 .day.today:not(.day-empty) { box-shadow:inset 0 0 0 2px #f8dfff,0 0 0 1px #6e337f; }
 
 .legend-section { margin:9px 0 -4px; border-top:1px solid #ece5ef; }
@@ -414,10 +411,7 @@ dialog>button,.calendar-button { margin-top:16px; border-radius:12px; padding:12
   .sync-preview li { border-color:#4f4255; }
   .sync-preview small { color:#d9ccdc; }
   .day-empty { color:#f6eff7; }
-  .day-empty.has-colleagues { background:#3d3342; }
-  .colleague-dot { background:#cdbbd1; }
   .day.today.day-empty { background:#51405a; box-shadow:inset 0 0 0 1px #e2a8f5; }
-  .day.today.day-empty.has-colleagues { background:#5a4662; }
   .day.today:not(.day-empty) { box-shadow:inset 0 0 0 2px #ffe8ff,0 0 0 1px #d68ded; }
   .day.selected { outline-color:#fff; }
   .delete-month { color:#ff9bb1; }

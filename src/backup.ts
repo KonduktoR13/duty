@@ -118,6 +118,7 @@ const settings = z.array(
     z.tuple([z.literal("installationId"), text]),
     z.tuple([z.literal("googleIntegration"), google]),
     z.tuple([z.literal("calendarMode"), z.enum(["grid", "list"])]),
+    // Keep accepting backups from versions with the calendar colleague toggle.
     z.tuple([z.literal("showColleagues"), z.boolean()]),
     z.tuple([z.literal("legendMonthOnly"), z.boolean()]),
     z.tuple([z.literal("employeeWorkloadSort"), z.enum(["month", "total"])]),

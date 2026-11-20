@@ -15,7 +15,6 @@ type CalendarViewState = {
   currentDelta: string
   selectedDate: string | null
   legendExpanded: boolean
-  showColleagues: boolean
   calendarMode: 'grid' | 'list'
   allMarks: () => CalendarMark[]
   groupMarks: (marks: CalendarMark[]) => Map<string, CalendarMark[]>
@@ -29,7 +28,6 @@ export function createCalendarView(state: CalendarViewState) {
     currentDelta,
     selectedDate,
     legendExpanded,
-    showColleagues,
     calendarMode,
     allMarks,
     groupMarks,
@@ -175,13 +173,11 @@ export function createCalendarView(state: CalendarViewState) {
   function calendarPage(
     month: MonthRecord,
     marksByDate: Map<string, CalendarMark[]>,
-    suppliedForeign?: Map<string, ForeignDayEntry[]>,
   ) {
     const currentDay = todayId()
     const value = new Date(month.id + '-01T12:00:00')
     const offset = (value.getDay() + 6) % 7
     const totalDays = new Date(value.getFullYear(), value.getMonth() + 1, 0).getDate()
-    const foreignByDate = suppliedForeign || foreignEntriesByDate(months, month.id, currentDelta)
     const cells: string[] = Array.from(
       { length: offset },
       () => '<i class="day-blank" aria-hidden="true"></i>',
@@ -189,15 +185,9 @@ export function createCalendarView(state: CalendarViewState) {
     for (let day = 1; day <= totalDays; day++) {
       const dateKey = month.id + '-' + String(day).padStart(2, '0')
       const marks = marksByDate.get(dateKey) || []
-      const hasColleagues =
-        showColleagues && !marks.length && (foreignByDate.get(dateKey)?.length || 0) > 0
       if (!marks.length) {
-        const label = hasColleagues
-          ? `${date(dateKey)}: есть смены других D-номеров`
-          : `${date(dateKey)}: нет смен`
         cells.push(
           '<button class="day day-empty ' +
-            (hasColleagues ? 'has-colleagues ' : '') +
             (selectedDate === dateKey ? 'selected ' : '') +
             (dateKey === currentDay ? 'today' : '') +
             '" data-day="' +
@@ -205,12 +195,10 @@ export function createCalendarView(state: CalendarViewState) {
             '"' +
             (dateKey === currentDay ? ' aria-current="date"' : '') +
             ' aria-label="' +
-            esc(label) +
+            esc(`${date(dateKey)}: нет ваших смен`) +
             '"><b>' +
             day +
-            '</b>' +
-            (hasColleagues ? '<i class="colleague-dot" aria-hidden="true"></i>' : '') +
-            '</button>',
+            '</b></button>',
         )
         continue
       }
@@ -264,12 +252,11 @@ export function createCalendarView(state: CalendarViewState) {
   function selectedDetails(
     marksByDate: Map<string, CalendarMark[]>,
     month: MonthRecord,
-    foreignByDate: Map<string, ForeignDayEntry[]>,
   ) {
     if (!selectedDate) return ''
+    const entries = foreignEntriesByDate(months, month.id, currentDelta).get(selectedDate) || []
     const marks = marksByDate.get(selectedDate) || []
     if (!marks.length) {
-      const entries = foreignByDate.get(selectedDate) || []
       const content = entries.length
         ? foreignEntriesHtml(entries, false)
         : '<b>Нет смен</b><span class="empty-detail">В исходном графике на этот день рабочих отметок нет.</span>'
@@ -312,7 +299,6 @@ export function createCalendarView(state: CalendarViewState) {
     const boundaryNote = source16
       ? '<p class="storage-status">В PDF указано 16 ч. Суточная смена подтверждена единственной отметкой 16 в последний день или продолжением 8 ч в следующем месяце.</p>'
       : ''
-    const entries = foreignByDate.get(selectedDate) || []
     return (
       '<section class="shift-details" id="shift-details" aria-label="Информация за ' +
       esc(date(selectedDate)) +
@@ -331,15 +317,12 @@ export function createCalendarView(state: CalendarViewState) {
 
   function monthView(month: MonthRecord) {
     const marksByDate = groupMarks(allMarks())
-    const foreignByDate = foreignEntriesByDate(months, month.id, currentDelta)
     const toolbar =
       '<div class="calendar-tools"><button id="today">Сегодня</button><div class="view-switch" role="group" aria-label="Вид графика"><button id="grid-mode" aria-pressed="' +
       (calendarMode === 'grid') +
       '">Календарь</button><button id="list-mode" aria-pressed="' +
       (calendarMode === 'list') +
-      '">Список</button></div></div><label class="colleagues-toggle"><input type="checkbox" id="show-colleagues"' +
-      (showColleagues ? ' checked' : '') +
-      '> Показывать коллег в календаре</label>'
+      '">Список</button></div></div>'
     const navigation =
       '<nav class="months"><button id="prev" aria-label="Предыдущий месяц">‹</button><button id="picker" aria-label="Выбрать месяц"><span class="month-title">' +
       humanMonth(month.id) +
@@ -368,7 +351,7 @@ export function createCalendarView(state: CalendarViewState) {
         (rows || '<p>Рабочих отметок нет.</p>') +
         '</section>' +
         calendarSyncCard(month) +
-        selectedDetails(marksByDate, month, foreignByDate)
+        selectedDetails(marksByDate, month)
       )
     }
     return (
@@ -378,15 +361,15 @@ export function createCalendarView(state: CalendarViewState) {
       '<section class="calendar" id="calendar"><div class="week">' +
       ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'].map((day) => '<span>' + day + '</span>').join('') +
       '</div><div class="calendar-viewport" id="calendar-viewport"><div class="calendar-track" id="calendar-track">' +
-      calendarPage(month, marksByDate, foreignByDate) +
+      calendarPage(month, marksByDate) +
       '</div></div><div class="legend-section"><button class="legend-toggle" id="legend-toggle" aria-expanded="' +
       legendExpanded +
       '" aria-controls="calendar-legend"><span>Легенда</span><small></small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' +
       (legendExpanded ? ' expanded' : '') +
       '" id="calendar-legend"' + (legendExpanded ? '' : ' inert') +
-      '><label class="colleagues-toggle legend-filter"><input type="checkbox" id="legend-month-only"> Только выбранный месяц</label><div class="legend" id="legend-entries"></div></div></div></section></section>' +
+      '><label class="legend-filter"><input type="checkbox" id="legend-month-only"> Только выбранный месяц</label><div class="legend" id="legend-entries"></div></div></div></section></section>' +
       calendarSyncCard(month) +
-      selectedDetails(marksByDate, month, foreignByDate)
+      selectedDetails(marksByDate, month)
     )
   }
 

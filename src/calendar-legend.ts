@@ -26,7 +26,6 @@ const personalEntries = [
   { kind: 'timeoff', label: 'Компенсационный отдых', tones: [personalTone('purple')] },
   { kind: 'note', label: 'Своя запись · выбранный цвет', tones: personalColors.map(personalTone) },
 ]
-const colleagueEntry = { label: 'Смены коллег в свободный день', samples: '<i class="day day-empty has-colleagues legend-swatch"><i class="colleague-dot"></i></i>' }
 const cancellationEntries = [
   { label: '⊘ · смена отменена вами', symbol: '⊘' },
   { label: '! · отмена завершена или смена изменилась', symbol: '!' },
@@ -51,7 +50,6 @@ export function bindCalendarLegend(monthOnly: boolean, save: (monthOnly: boolean
       day.classList.contains(tone) && !day.classList.contains('personal-day-color'),
     )),
   }))
-  if (days.some(day => day.classList.contains('has-colleagues'))) monthSchedule.push(colleagueEntry)
 
   const markers = days.flatMap(day => [...day.querySelectorAll<HTMLElement>('[data-legend-kind]')])
   const monthPersonal = personalEntries.map(({ kind, label }) => {
@@ -77,7 +75,7 @@ export function bindCalendarLegend(monthOnly: boolean, save: (monthOnly: boolean
   const number = new Intl.PluralRules('ru')
   const units: Partial<Record<Intl.LDMLPluralRule, string>> = { one: 'обозначение', few: 'обозначения' }
   const update = (onlyMonth: boolean) => {
-    const schedule = onlyMonth ? monthSchedule : [...scheduleEntries.map(fullEntry), colleagueEntry]
+    const schedule = onlyMonth ? monthSchedule : scheduleEntries.map(fullEntry)
     const personal = onlyMonth ? monthPersonal : [...personalEntries.map(fullEntry), {
       label: '⊘ · отменена вами; ! · отмена завершена или смена изменилась',
       samples: swatch('cancelled-swatch'),

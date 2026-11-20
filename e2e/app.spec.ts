@@ -108,15 +108,22 @@ test('replacement preview, rollback and backup round trip', async ({ page }) => 
   const download = await downloadPromise
   const path = await download.path()
   expect(path).toBeTruthy()
+  const backup = JSON.parse(readFileSync(path!, 'utf8'))
+  backup.settings.push(['showColleagues', true])
   const chooserPromise = page.waitForEvent('filechooser')
   await page.locator('#import-backup').click()
-  await (await chooserPromise).setFiles(path!)
+  await (await chooserPromise).setFiles({
+    name: 'legacy-settings.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(backup)),
+  })
   await expect(page.locator('#dialog')).toContainText('Месяцев: 1')
   await page.locator('#restore-backup').click()
   await expect(page.locator('#dialog')).not.toBeVisible()
   await page.locator('[data-section="calendar"]').click()
   await expect(page.locator('[data-day="2026-09-07"]')).toContainText('24')
   await expect(page.locator('#legend-month-only')).not.toBeChecked()
+  await expect(page.locator('#show-colleagues, .has-colleagues, .colleague-dot')).toHaveCount(0)
 })
 
 test('production CSP, keyboard focus and narrow layout', async ({ page }) => {
@@ -375,7 +382,7 @@ test('update history opens from settings, supports back and keyboard, and stays 
   await expect(latest).toHaveAttribute('open', '')
   await expect(latest.locator('summary')).toContainText(appVersion)
   await expect(latest.locator('time')).toHaveAttribute('datetime', '2026-11-20')
-  await expect(latest).toContainText('Только выбранный месяц')
+  await expect(latest).toContainText('Показывать коллег в календаре')
   const homeDuty = page.locator('.update-entry').filter({ has: page.locator('summary b', { hasText: '0.3.3' }) })
   await homeDuty.locator('summary').focus()
   await page.keyboard.press('Enter')
@@ -404,7 +411,7 @@ test('update history opens from settings, supports back and keyboard, and stays 
   await page.reload()
   await page.locator('#settings').click()
   await page.locator('#updates-settings').click()
-  await expect(page.locator('.update-entry')).toHaveCount(12)
+  await expect(page.locator('.update-entry')).toHaveCount(13)
   await expect(latest).toHaveAttribute('open', '')
   await expect(latest).toContainText(appVersion)
   await page.keyboard.press('Escape')
@@ -429,7 +436,8 @@ test('legend follows the selected month and remembers full mode offline at 320px
   await page.locator('#prev').click()
   await expect(legend.locator('.legend-row')).toHaveText(['24 ч · суточная смена'])
   await monthOnly.uncheck()
-  await expect(toggle).toContainText('22 обозначения')
+  await expect(toggle).toContainText('21 обозначение')
+  await expect(legend).not.toContainText('Смены коллег')
   const manual = legend.locator('.legend-block').filter({ hasText: 'Ручные записи' })
   await expect(manual.locator('.legend-row')).toHaveCount(9)
   for (const label of ['Дополнительный выход', 'Erakorraline', 'Koduvalve', 'Отпуск', 'Больничный', 'Уход за ребёнком', 'Компенсационный отдых', 'Своя запись']) {
@@ -456,4 +464,8 @@ test('legend follows the selected month and remembers full mode offline at 320px
   await expect(page.locator('#calendar-legend')).toContainText('Компенсационный отдых')
   await monthOnly.check()
   await expect(legend.locator('.legend-row')).toHaveText(['24 ч · суточная смена'])
+  await page.locator('[data-day="2026-09-08"]').click()
+  const colleague = page.locator('#shift-details .foreign-entry')
+  await expect(colleague).toContainText('D40')
+  await expect(colleague).toContainText(/\d{2}:\d{2}–\d{2}:\d{2}/)
 })

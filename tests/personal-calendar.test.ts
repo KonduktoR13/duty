@@ -12,7 +12,7 @@ const desired = (events = [home], previous: CalendarEventDraft[] = []) => desire
 function page(marks: CalendarMark[]) {
   const grouped = new Map<string, CalendarMark[]>()
   for (const mark of marks) grouped.set(mark.date, [...grouped.get(mark.date) || [], mark])
-  return createCalendarView({ months: [], currentDelta: 'D12', selectedDate: null, legendExpanded: false, showColleagues: false, calendarMode: 'grid', allMarks: () => marks, groupMarks: () => grouped, todayId: () => '2026-11-18', date: d => d, calendarSyncCard: () => '' }).calendarPage(pdf, grouped)
+  return createCalendarView({ months: [], currentDelta: 'D12', selectedDate: null, legendExpanded: false, calendarMode: 'grid', allMarks: () => marks, groupMarks: () => grouped, todayId: () => '2026-11-18', date: d => d, calendarSyncCard: () => '' }).calendarPage(pdf, grouped)
 }
 
 describe('manual calendar integration', () => {
