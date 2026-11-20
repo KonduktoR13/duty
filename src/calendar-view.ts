@@ -318,7 +318,9 @@ export function createCalendarView(state: CalendarViewState) {
   function monthView(month: MonthRecord) {
     const marksByDate = groupMarks(allMarks())
     const toolbar =
-      '<div class="calendar-tools"><button id="today">Сегодня</button><div class="view-switch" role="group" aria-label="Вид графика"><button id="grid-mode" aria-pressed="' +
+      '<div class="calendar-tools"><button id="today"' +
+      (month.id !== todayId().slice(0, 7) ? ' class="return-to-today" title="Вернуться к текущему месяцу"' : '') +
+      '>Сегодня</button><div class="view-switch" role="group" aria-label="Вид графика"><button id="grid-mode" aria-pressed="' +
       (calendarMode === 'grid') +
       '">Календарь</button><button id="list-mode" aria-pressed="' +
       (calendarMode === 'list') +

@@ -888,11 +888,11 @@ function calendarSyncCard(month: MonthRecord) {
     (highlightSyncOffer ? " suggested" : "") +
     '"><div class="sync-mark">G</div><div class="sync-copy"><b>Google Calendar</b><span class="sync-status"><i></i>' +
     label +
-    '</span><small title="' +
+    '</span></div><small title="' +
     esc(details) +
     '">' +
     esc(details) +
-    '</small></div><div class="sync-actions"><button id="sync-month"' +
+    '</small><div class="sync-actions"><button id="sync-month"' +
     (disabled ? " disabled" : "") +
     ">" +
     action +
@@ -1233,7 +1233,7 @@ function animateMonthTitle(target: MonthRecord, direction: -1 | 1) {
 
 function setMonthNavigationDisabled(value: boolean) {
   document
-    .querySelectorAll<HTMLButtonElement>("#prev,#next,#picker")
+    .querySelectorAll<HTMLButtonElement>("#prev,#next,#picker,#today")
     .forEach((button) => {
       button.disabled = value;
     });

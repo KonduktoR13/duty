@@ -48,14 +48,11 @@ export function decoratePersonalCalendar(
   const own = !c.config.owner || visibleOwner === c.config.owner;
   const add = document.createElement("button");
   add.id = "add-personal";
-  add.className = "primary";
-  add.textContent = own ? "＋ Добавить" : "＋ В мой календарь";
+  add.textContent = "+ Запись";
+  add.title = own ? "Добавить запись" : "Добавить запись в мой календарь";
+  add.setAttribute("aria-label", add.title);
   const tools = document.querySelector(".calendar-tools");
-  if (tools) {
-    const toggle = tools.querySelector(".view-switch");
-    if (toggle) tools.after(toggle);
-    tools.append(add);
-  }
+  tools?.append(add);
   const welcome = document.querySelector(".welcome");
   if (welcome) {
     const b = document.createElement("button");

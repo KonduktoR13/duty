@@ -111,7 +111,7 @@ test('manual home cancellation removes its colors and hours, restores, and survi
   await page.locator('#confirm-cancellation').click()
   await expect(page.locator('#dialog')).not.toBeVisible()
   await expect(day).toHaveClass(/day-empty/)
-  await expect(page.locator('.sync-copy small')).toContainText('0 подтверждённых событий')
+  await expect(page.locator('.sync-card small')).toContainText('0 подтверждённых событий')
   await page.locator('[data-section="documents"]').click()
   const downloadPromise = page.waitForEvent('download')
   await page.locator('#export-backup').click()
@@ -131,7 +131,7 @@ test('manual home cancellation removes its colors and hours, restores, and survi
   await expect(page.locator('#dialog')).not.toBeVisible()
   await page.locator('#grid-mode').click()
   await expect(day).toHaveClass(/home-duty/)
-  await expect(page.locator('.sync-copy small')).toContainText('1 подтверждённых событий')
+  await expect(page.locator('.sync-card small')).toContainText('1 подтверждённых событий')
 })
 
 test('restoration requires resolving a replacement manual shift rather than double counting', async ({ page }) => {

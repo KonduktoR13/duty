@@ -163,7 +163,7 @@ test("manual koduvalve follows a 22-hour shift, supports arbitrary time, editing
   await expect(homeDay).not.toHaveClass(/day-empty/);
   await expect(homeDay).toContainText('V2.5');
   await expect(homeDay).toHaveAttribute('aria-label', /06:00–08:30/);
-  await expect(page.locator('.sync-copy small')).toContainText('подтверждённых событий');
+  await expect(page.locator('.sync-card small')).toContainText('подтверждённых событий');
   await page.locator('.personal-day-content [data-edit-event]').click();
   await expect(page.locator('#dialog h2')).toHaveText("Изменить запись");
   await page.locator('[name="endTime"]').fill("09:15");
@@ -171,6 +171,8 @@ test("manual koduvalve follows a 22-hour shift, supports arbitrary time, editing
   await expect(page.locator("#dialog")).not.toBeVisible();
   await expect(page.locator(".personal-day-content [data-edit-event]")).toContainText("06:00–09:15");
   await expect(homeDay).toHaveAttribute('aria-label', /06:00–09:15/);
+  await page.locator('#detail-close').click();
+  await expect(page.locator('#shift-details')).not.toBeVisible();
   await page.locator('#next').click();
   await expect(page.locator('#picker')).toContainText('октябрь');
   await page.locator('#prev').click();
@@ -240,7 +242,7 @@ test("manual home duty without PDF colors the day and offers ordinary Google syn
   const day = page.locator('[data-day="2026-11-19"]');
   await expect(day).toHaveClass(/home-duty/);
   await expect(page.locator('#sync-month')).toBeEnabled();
-  await expect(page.locator('.sync-copy small')).toContainText('1 подтверждённых событий');
+  await expect(page.locator('.sync-card small')).toContainText('1 подтверждённых событий');
   await page.reload();
   await expect(day).toHaveClass(/home-duty/);
   for (const theme of ['light', 'dark'] as const) {

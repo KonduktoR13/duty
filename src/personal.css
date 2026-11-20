@@ -340,16 +340,6 @@
   font-size: 12px;
   max-width: 130px;
 }
-.calendar-tools + #grid-mode,
-.app-content > .view-switch {
-  margin: 0 0 12px auto;
-  display: flex;
-  width: max-content;
-  max-width: 100%;
-}
-.calendar-tools #add-personal {
-  font-size: 13px;
-}
 .payment-detail {
   border-bottom: 1px solid var(--line);
   padding: 10px 0;
@@ -407,33 +397,10 @@
     font-size: 11px;
   }
 }
-.calendar-tools #add-personal {
-  background: var(--accent);
-  color: #fff;
-  border: 0;
-}
-.app-content > .view-switch {
-  padding: 3px;
-  border-radius: 16px;
-  background: var(--soft);
-  gap: 3px;
-}
-.app-content > .view-switch button {
-  background: transparent;
-  padding: 10px 12px;
-  border-radius: 13px;
-  color: var(--text);
-  font-size: 13px;
-}
-.app-content > .view-switch button[aria-pressed="true"] {
-  background: var(--accent);
-  color: #fff;
-}
 .personal-form .rate-fields {
   display: grid;
   gap: 8px;
 }
-.calendar-tools #add-personal,
 .event-type-choices button[aria-pressed="true"],
 .choice-pair button[aria-pressed="true"] {
   background: #582c76;
