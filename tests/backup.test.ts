@@ -62,16 +62,17 @@ it("accepts local salary forecast settings in a backup", async () => {
   );
   expect(result.settings).toEqual([["salarySettings", salary]]);
 });
-it("preserves the workload sort preference in a backup", async () => {
+it("preserves the workload sort and legend preferences in a backup", async () => {
+  const settings = [["employeeWorkloadSort", "total"], ["legendMonthOnly", false]];
   const result = await readBackup(
     new Blob([
       JSON.stringify({
         ...base,
-        settings: [["employeeWorkloadSort", "total"]],
+        settings,
       }),
     ]),
   );
-  expect(result.settings).toEqual([["employeeWorkloadSort", "total"]]);
+  expect(result.settings).toEqual(settings);
 });
 it("reads v2 personal data, rejects impossible dates, and never silently strips new records", async () => {
   const event = {

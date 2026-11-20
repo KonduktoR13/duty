@@ -90,7 +90,7 @@ export function decoratePersonalCalendar(
         .slice(0, 2)
         .map(
           (e) =>
-            `<i class="color-${e.color}">${e.kind === "note" ? "●" : e.kind === "home" ? "V" : isWork(e) ? "+" : e.kind === "vacation" ? "☼" : "◇"}</i>`,
+            `<i class="color-${e.color}" data-legend-kind="${e.kind}">${e.kind === "note" ? "●" : e.kind === "home" ? "V" : isWork(e) ? "+" : e.kind === "vacation" ? "☼" : "◇"}</i>`,
         )
         .join("") + (events.length > 2 ? `<i>+${events.length - 2}</i>` : "");
     cell.append(marker);

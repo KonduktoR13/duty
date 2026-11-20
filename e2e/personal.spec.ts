@@ -15,6 +15,7 @@ test("personal note works without PDF, survives offline reload and keeps form st
   await page.goto("/");
   await page.locator("#add-personal").click();
   await page.locator('[name="title"]').fill("Обучение K-команды");
+  await page.getByRole("radio", { name: "Зелёный" }).check();
   await page.locator('[name="noteMode"]').selectOption("hours");
   await page.locator('[name="hours"]').fill("4,5");
   const noteDate = await page.locator('[name="start"]').inputValue();
@@ -24,6 +25,13 @@ test("personal note works without PDF, survives offline reload and keeps form st
     "Обучение K-команды",
   );
   await expect(page.locator(`[data-day="${noteDate}"]`)).toHaveClass(/personal-day-color/);
+  await page.locator("#detail-close").click();
+  await expect(page.locator("#shift-details")).not.toBeVisible();
+  await page.locator("#legend-toggle").click();
+  const legend = page.locator("#calendar-legend");
+  await expect(legend.locator(".legend-row > span:last-child")).toHaveText(["Своя запись · выбранный цвет"]);
+  await expect(legend.locator(".legend-swatch")).toHaveClass(/color-green/);
+  await expect(legend.locator(".legend-marker.color-green")).toHaveText("●");
   await page.locator('[data-section="analysis"]').click();
   await expect(page.locator(".personal-summary")).toContainText("4,5 ч");
   await page.locator('[data-section="calendar"]').click();

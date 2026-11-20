@@ -1,6 +1,7 @@
 import { cancellationStatus, shiftLabel } from "./cancellation-view";
 import { activeCancellations, cancellationMatches, cancelled, newCancellation, reconcileCancellations, sameShift, shiftTargets, targetDate } from "./shift-cancellations";
 import { updateHistoryView } from "./update-history";
+import { bindCalendarLegend } from "./calendar-legend";
 import {
   defaultPersonalSettings,
   type PersonalEvent,
@@ -280,6 +281,7 @@ let googleSettings: GoogleIntegrationSettings = { enabled: false };
 let salarySettings: SalarySettings = DEFAULT_SALARY_SETTINGS;
 let highlightSyncOffer = false;
 let legendExpanded = false;
+let legendMonthOnly = true;
 let lastRenderedSection: AppSection = section;
 let calendarMode: "grid" | "list" = "grid";
 let showColleagues = false;
@@ -577,13 +579,18 @@ function render() {
     '">◔<span>Анализ</span></button><button data-section="documents" class="' +
     (section === "documents" ? "active" : "") +
     '">▤<span>Графики</span></button></nav></div><input id="file" type="file" accept="application/pdf,.pdf" hidden>';
-  if (section === "calendar")
+  if (section === "calendar") {
     decoratePersonalCalendar(
       payrollContext(),
       selected,
       selectedDate,
       currentDelta,
     );
+    bindCalendarLegend(legendMonthOnly, (checked) => {
+      legendMonthOnly = checked;
+      run(() => storage.set("legendMonthOnly", checked));
+    });
+  }
   if (
     section === "analysis" &&
     (!personalSettings.owner || currentDelta === personalSettings.owner) &&
@@ -1056,6 +1063,7 @@ function bind() {
       button.setAttribute("aria-expanded", String(legendExpanded));
       const legend = document.querySelector<HTMLElement>("#calendar-legend");
       legend?.classList.toggle("expanded", legendExpanded);
+      legend?.toggleAttribute("inert", !legendExpanded);
       if (legendExpanded)
         window.setTimeout(() => {
           const content = legend?.closest<HTMLElement>(".app-content");
@@ -3127,6 +3135,7 @@ async function start() {
         ? "list"
         : "grid";
     showColleagues = Boolean(await storage.setting("showColleagues"));
+    legendMonthOnly = (await storage.setting<boolean>("legendMonthOnly")) !== false;
     await refresh();
   } catch (error) {
     app.innerHTML =

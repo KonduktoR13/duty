@@ -1,4 +1,3 @@
-import { calendarLegendCount, calendarLegendView } from './calendar-legend'
 import { humanMonth, timeLabel } from './schedule'
 import {
   candidateForMonth,
@@ -382,9 +381,10 @@ export function createCalendarView(state: CalendarViewState) {
       calendarPage(month, marksByDate, foreignByDate) +
       '</div></div><div class="legend-section"><button class="legend-toggle" id="legend-toggle" aria-expanded="' +
       legendExpanded +
-      '" aria-controls="calendar-legend"><span>Легенда</span><small>' + calendarLegendCount + ' обозначений</small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' +
+      '" aria-controls="calendar-legend"><span>Легенда</span><small></small><i aria-hidden="true">⌄</i></button><div class="legend-collapsible' +
       (legendExpanded ? ' expanded' : '') +
-      '" id="calendar-legend"><div class="legend">' + calendarLegendView() + '</div></div></div></section></section>' +
+      '" id="calendar-legend"' + (legendExpanded ? '' : ' inert') +
+      '><label class="colleagues-toggle legend-filter"><input type="checkbox" id="legend-month-only"> Только выбранный месяц</label><div class="legend" id="legend-entries"></div></div></div></section></section>' +
       calendarSyncCard(month) +
       selectedDetails(marksByDate, month, foreignByDate)
     )
